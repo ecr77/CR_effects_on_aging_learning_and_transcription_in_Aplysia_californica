@@ -1,0 +1,2206 @@
+---
+title: "AIM 2 txOUT=T"
+output: html_document
+date: "2025-02-07"
+---
+####### Load libraries
+```{r}
+library(dplyr)
+library(tximport)
+library(DESeq2)
+library(ggplot2)
+library(sva)
+library(pheatmap) # for hierarchical clustering
+library(purrr) # for "set_names()"
+library(tibble)
+library(ggVennDiagram)
+library(UpSetR)
+library(GenomicFeatures)
+library(devtools) # for making the Org.db
+library(AnnotationForge)
+library(robustbase) # needed for rrcov
+library(rrcov) # for statistically testing for outliers in PCA
+library(stringr) # for str_detect to filter metadata
+library(xlsx)
+library(colorRamp2)
+
+library(PCAtools)
+library(ComplexHeatmap)
+```
+
+# Import data
+```{r}
+sample_table = read.csv("/Users/school/Projects/CR/samples.txt", header = T, stringsAsFactors = T)
+sample_table$P_SAV <- as.character(sample_table$P_SAV)
+sample_table$Age <- factor(sample_table$Age, levels = c("M","A") )
+sample_table$TRT <- factor(sample_table$TRT, levels = c("U", "T"))
+names(sample_table)[names(sample_table) == "TRT"] <- "LFI"
+row.names(sample_table)=sample_table$Sample_ID
+
+# Sample 840 (Aged, Trained, CR ; ATCR) is technically a dud since its TTIM on day1 = 68 sec. This animal was retrained and dissected because we were short on aged CR animals. Still, I think it best to exclude this sample.
+# I will delete this sample from the metadata file which will be used to import the sample data, so this sample will not be imported
+
+metadata <- sample_table[!(sample_table$Sample_ID %in% c("840")),]
+##
+
+paste0('/Users/school/Projects/CR/quants/', 
+       pull(metadata, RNAseq_ID), '/quant.sf')
+sample_files = paste0('/Users/school/Projects/CR/quants/',
+                      pull(metadata, RNAseq_ID), '/quant.sf')
+names(sample_files) = pull(metadata, Sample_ID)
+all(file.exists(sample_files))
+data.frame(thefiles = metadata, doihave = file.exists(sample_files))
+
+txdb_aplysia <- makeTxDbFromGFF("/Users/school/Documents/Documents/UAB/UAB009/genome/AplCal3.0_GFF.gff",
+                        format = "gff",
+                        organism = "Aplysia californica")
+k_aplysia <- keys(txdb_aplysia, keytype = "TXNAME")
+tx2gene_aplysia <- AnnotationDbi::select(txdb_aplysia, k_aplysia, "GENEID", "TXNAME")
+tx2gene_aplysia$TXNAME <- gsub("\\.[0-9]","",tx2gene_aplysia$TXNAME) 
+
+count_data = tximport(files = sample_files, importer=read.delim,
+         type = "salmon",
+         txOut = TRUE,
+         tx2gene = tx2gene_aplysia,
+         ignoreTxVersion = T)
+```
+
+## Model dds
+```{r}
+## as a comparison I will run this will all samples (ignoring any outlieres or DUDs)
+dds <- DESeqDataSetFromTximport(count_data,
+                                colData = metadata,
+                                design = ~ Age + LFI + Diet)
+colData(dds)
+dds$group <- factor(paste0(dds$Age, dds$LFI, dds$Diet))
+design(dds) <- ~group
+colData(dds)
+
+## counts pre-filtering
+dim(dds) # starting with 29,261 transcripts in 47 samples
+smallestGroupSize <- 5 # there are 5 samples in the smallest group
+keep <- rowSums(counts(dds) >= 1) >= smallestGroupSize
+dds2 <- dds[keep,]
+dim(dds2) # 13,877 transcripts in 47 samples
+```
+
+## Test for outliers in PCA
+```{r}
+vsd <- vst(dds2)
+# preform and plot Classical PCA
+pc12 <- plotPCA(vsd, intgroup = c("Age","LFI","Diet","group"), returnData = T) #PC1=11, PC2=09
+## plot PCA with 99% CI to visually inspect the data
+ggplot(pc12, aes(x=PC1, y=PC2, color=Age)) +
+  geom_point(aes(fill=Age), 
+       colour="black",pch=21, size=5)  +
+  xlab(paste0("PC1: 11% varience")) +
+  ylab(paste0("PC2: 09% variance")) +
+  coord_fixed() +
+  stat_ellipse(level = 0.999) +
+  theme_bw() +
+  guides(fill=F) +
+  theme(axis.text.x=element_text(size=18), 
+        axis.title.x=element_text(size=18),
+        axis.text.y=element_text(size=18), 
+        axis.title.y=element_text(size=18),
+        legend.title = element_text(size=16),
+        legend.key.size = unit(0.6, 'cm'),
+        legend.position = c(0.91, 0.91)) +
+  scale_x_continuous(limits = c(-40, 40)) +
+  scale_y_continuous(limits = c(-40, 40))
+## After visual inspection there does appear to be some outlier samples as they fall outside of their respective 99% CI but in order to confidently exclude these samples I will run a Robust PCA. 
+## The first step is to get the names of the 500 genes that contributed to the PCA I just plotted. I will do this by modifying the DESeq2 function 'plotPCA' 
+DESeq2:::plotPCA.DESeqTransform # This code allows me to see the underlying script behind this function
+# I will make a new function by taking the first 2 lines of code and call this 'top500'
+top500 = function (object, ntop = 500)
+{
+  rv <- rowVars(assay(object))
+  select <- order(rv, decreasing = TRUE)[seq_len(min(ntop, length(rv)))]
+  top500 <- assay(object)[select,]
+}
+environment(top500) <- asNamespace('DESeq2') #this allows any hidden functions within the function to still work
+select <- rownames(top500(vsd)) # This give the 500 genes used to calculate the PCA in DESeq2
+rPCA <- PcaGrid(t(assay(vsd)[select,])) # This runs a Robust PCA on the vst data of the 500 genes
+plot(rPCA) # This plots the results from above. Samples that fall above the cutoff line are outliers (Chen et al 2020)
+## Using txOut = TRUE no samples are outliers --- This is puzzeling 
+# will now remove these samples form the metadata file and upload the remaining samples (essentially i will start over)
+```
+
+# Import data (outliers removed)
+```{r}
+sample_table = read.csv("/Users/school/Projects/CR/samples.txt", header = T, stringsAsFactors = T)
+sample_table$P_SAV <- as.character(sample_table$P_SAV)
+sample_table$Age <- factor(sample_table$Age, levels = c("M","A") )
+sample_table$TRT <- factor(sample_table$TRT, levels = c("U", "T"))
+names(sample_table)[names(sample_table) == "TRT"] <- "LFI"
+row.names(sample_table)=sample_table$Sample_ID
+
+# Sample 840 (Aged, Trained, CR ; ATCR) is technically a dud since its TTIM on day1 = 68 sec. This animal was retrained and dissected because we were short on aged CR animals. Still, I think it best to exclude this sample.
+# Samples 809 and 805 were determined to be outliers after performing a Robust PCA. Please see the code chunk above this one for more context. Both samples were (Mature, Untrained, CR ; MUCR)
+# I will delete this sample from the metadata file which will be used to import the sample data, so this sample will not be imported
+
+metadata <- sample_table[!(sample_table$Sample_ID %in% c("840","809","805")),]
+##
+
+paste0('/Users/school/Projects/CR/quants/', 
+       pull(metadata, RNAseq_ID), '/quant.sf')
+sample_files = paste0('/Users/school/Projects/CR/quants/',
+                      pull(metadata, RNAseq_ID), '/quant.sf')
+names(sample_files) = pull(metadata, Sample_ID)
+all(file.exists(sample_files))
+data.frame(thefiles = metadata, doihave = file.exists(sample_files))
+
+txdb_aplysia <- makeTxDbFromGFF("/Users/school/Documents/Documents/UAB/UAB009/genome/AplCal3.0_GFF.gff",
+                        format = "gff",
+                        organism = "Aplysia californica")
+k_aplysia <- keys(txdb_aplysia, keytype = "TXNAME")
+tx2gene_aplysia <- AnnotationDbi::select(txdb_aplysia, k_aplysia, "GENEID", "TXNAME")
+tx2gene_aplysia$TXNAME <- gsub("\\.[0-9]","",tx2gene_aplysia$TXNAME) 
+
+count_data = tximport(files = sample_files, importer=read.delim,
+         type = "salmon",
+         txOut = TRUE,
+         tx2gene = tx2gene_aplysia,
+         ignoreTxVersion = T)
+```
+
+## Model dds
+```{r}
+## as a comparison I will run this will all samples (ignoring any outlieres or DUDs)
+dds <- DESeqDataSetFromTximport(count_data,
+                                colData = metadata,
+                                design = ~ Age + LFI + Diet)
+colData(dds)
+dds$group <- factor(paste0(dds$Age, dds$LFI, dds$Diet))
+design(dds) <- ~group
+colData(dds)
+
+## counts pre-filtering
+dim(dds) # starting with 21,034 transcripts in 45 samples
+smallestGroupSize <- 4 # there are 4 samples in the smallest group
+keep <- rowSums(counts(dds) >= 1) >= smallestGroupSize
+dds2 <- dds[keep,]
+dim(dds2) # 14,659 transcripts in 45 samples
+```
+## PCA
+```{r}
+vsd <- vst(dds2)
+# preform and plot Classical PCA
+pc12 <- plotPCA(vsd, intgroup = c("Age","LFI","Diet","group"), returnData = T) #PC1=27, PC2=09
+## plot PCA with 99% CI to visually inspect the data
+ggplot(pc12, aes(x=PC1, y=PC2, color=Age)) +
+  geom_point(aes(fill=Age), 
+       colour="black",pch=21, size=5)  +
+  xlab(paste0("PC1: 27% varience")) +
+  ylab(paste0("PC2: 09% variance")) +
+  coord_fixed() +
+  stat_ellipse(level = 0.999) +
+  theme_bw() +
+  guides(fill=F) +
+  theme(axis.text.x=element_text(size=18), 
+        axis.title.x=element_text(size=18),
+        axis.text.y=element_text(size=18), 
+        axis.title.y=element_text(size=18),
+        legend.title = element_text(size=16),
+        legend.key.size = unit(0.6, 'cm'),
+        legend.position = c(0.91, 0.91)) +
+  scale_x_continuous(limits = c(-40, 40)) +
+  scale_y_continuous(limits = c(-40, 40))
+
+#library(PCAtools)
+myDat <- DESeq(dds2)
+vsd4PCA <- vst(myDat)
+select <- rownames(top500(vsd4PCA))
+vsd4PCA <- assay(vsd4PCA)[select,]
+# DESeq2:::plotPCA.DESeqTransform
+# rowData(vsd)
+# assay(vsd)
+# SummarizedExperiment:::assay
+```
+
+#### Update pca function in PCAtools
+```{r}
+PCAtools:::pca # this lets me see what the original function is
+pcaUpdateFromPCAtools = function (mat, metadata = NULL, center = TRUE, scale = FALSE, 
+    rank = NULL, removeVar = NULL, transposed = FALSE, BSPARAM = ExactParam()) 
+{
+    if (is.data.frame(mat)) {
+        mat <- as.matrix(mat)
+    }
+    if (!transposed) {
+        mat <- t(mat)
+    }
+    if (!is.null(metadata)) {
+        if (!identical(rownames(mat), rownames(metadata))) {
+            stop("'colnames(mat)' is not identical to 'rownames(metadata)'")
+        }
+    }
+    .center <- if (center) 
+        NULL
+    else 0
+    vars <- matrixStats::colVars(as.matrix(DelayedArray(mat)), useNames = TRUE, 
+                                 center = .center)
+    if (!is.null(removeVar)) {
+        message("-- removing the lower ", removeVar * 100, "% of variables based on variance")
+        varorder <- order(vars, decreasing = TRUE)
+        keep <- head(varorder, max(1, ncol(mat) * (1 - removeVar)))
+        mat <- mat[, keep, drop = FALSE]
+        vars <- vars[keep]
+    }
+    if (is.null(rank)) {
+        if (is(BSPARAM, "ExactParam")) {
+            rank <- min(dim(mat))
+        }
+        else {
+            stop("'rank' must be specified for approximate PCA methods")
+        }
+    }
+    pcaobj <- runPCA(mat, center = center, scale = scale, rank = rank, 
+        BSPARAM = BSPARAM)
+    if (scale) {
+        total.var <- length(vars)
+    }
+    else {
+        total.var <- sum(vars)
+    }
+    proportionvar <- (pcaobj$sdev^2)/total.var * 100
+    pcaobj <- list(rotated = data.frame(pcaobj$x), loadings = data.frame(pcaobj$rotation), 
+        variance = proportionvar, sdev = pcaobj$sdev, metadata = metadata, 
+        xvars = colnames(mat), yvars = rownames(mat), components = colnames(pcaobj$x))
+    rownames(pcaobj$rotated) <- pcaobj$yvars
+    rownames(pcaobj$loadings) <- pcaobj$xvars
+    names(pcaobj$variance) <- pcaobj$components
+    class(pcaobj) <- "pca"
+    return(pcaobj)
+} # this updated the function and named it something else
+environment(pcaUpdateFromPCAtools) <- asNamespace('PCAtools') # this lets R know that this function should be in the namespace of PCAtools to allow any nested functions within this updated function to work properly
+assignInNamespace('pca', pcaUpdateFromPCAtools, ns = 'PCAtools') # this now tells R to replace 'pca' with the updated function any time 'pca' is called in PCAtools
+```
+
+## PCA (continued)
+```{r}
+p <- pcaUpdateFromPCAtools(vsd4PCA, metadata = colData(myDat))
+moreThan70percentVarience <- which(cumsum(p$variance) > 70)[1] # find which PC = >70% variance -- now it is PC21
+# plot where >70% variance is in the PCs
+PCAtools::screeplot(p,
+                    components = getComponents(p, 1:25),
+                    vline = moreThan70percentVarience) +
+  geom_label(aes(x=moreThan70percentVarience + 0.5, y = 50,
+                 label = ">70%", vjust = -1, size = 8))
+# correlate traits to PCs to investigate what trait drives the variance in that PC (useing only PCs up to 70% variance)
+PCAtools::eigencorplot(p,
+             components = getComponents(p, 1:12),
+             metavars = c("Age","Diet","LFI","group"),
+             col = c('darkblue','blue2','black','red2','darkred'),
+             cexCorval = 0.8,
+             colCorval = 'white',
+             fontCorval = 2,
+             posLab = 'bottomleft',
+             rotLabX = 45,
+             posColKey = 'top',
+             cexLabColKey = 1.5,
+             scale = T,
+             main = 'PC1-8 trait correlations',
+             colFrame = 'white',
+             plotRsquared = F) # LFI now drives PC2 and Diet drives PC5 ---- this also is interesting There is some stuff going on in PC17 as well but i am going to ignore that for now
+##In PCAtools, a "negative correlate to PC" means that a variable has a negative correlation with a particular principal component (PC), indicating that as the PC value increases, the variable tends to decrease, and vice versa; essentially showing an inverse relationship between the variable and the PC
+## we will only look at positive correlations PC1 for Age, PC2 for LFI, and PC5 for Diet
+```
+### Modify plotPCA function in DESeq2
+```{r}
+DESeq2:::plotPCA.DESeqTransform
+plotPCA2.3 = function (object, intgroup = "condition", ntop = 500, returnData = FALSE) 
+{
+    rv <- rowVars(assay(object))
+    select <- order(rv, decreasing = TRUE)[seq_len(min(ntop, 
+        length(rv)))]
+    pca <- prcomp(t(assay(object)[select, ]))
+    percentVar <- pca$sdev^2/sum(pca$sdev^2)
+    if (!all(intgroup %in% names(colData(object)))) {
+        stop("the argument 'intgroup' should specify columns of colData(dds)")
+    }
+    intgroup.df <- as.data.frame(colData(object)[, intgroup, 
+        drop = FALSE])
+    group <- if (length(intgroup) > 1) {
+        factor(apply(intgroup.df, 1, paste, collapse = ":"))
+    }
+    else {
+        colData(object)[[intgroup]]
+    }
+    d <- data.frame(PC2 = pca$x[, 2], PC3 = pca$x[, 3], group = group, 
+        intgroup.df, name = colnames(object))
+    if (returnData) {
+        attr(d, "percentVar") <- percentVar[2:3]
+        return(d)
+    }
+    ggplot(data = d, aes_string(x = "PC2", y = "PC3", color = "group")) + 
+        geom_point(size = 3) + xlab(paste0("PC2: ", round(percentVar[2] * 
+        100), "% variance")) + ylab(paste0("PC3: ", round(percentVar[3] * 
+        100), "% variance")) + coord_fixed()
+}
+environment(plotPCA2.3) <- asNamespace('DESeq2')
+
+plotPCA5.6 = function (object, intgroup = "condition", ntop = 500, returnData = FALSE) 
+{
+    rv <- rowVars(assay(object))
+    select <- order(rv, decreasing = TRUE)[seq_len(min(ntop, 
+        length(rv)))]
+    pca <- prcomp(t(assay(object)[select, ]))
+    percentVar <- pca$sdev^2/sum(pca$sdev^2)
+    if (!all(intgroup %in% names(colData(object)))) {
+        stop("the argument 'intgroup' should specify columns of colData(dds)")
+    }
+    intgroup.df <- as.data.frame(colData(object)[, intgroup, 
+        drop = FALSE])
+    group <- if (length(intgroup) > 1) {
+        factor(apply(intgroup.df, 1, paste, collapse = ":"))
+    }
+    else {
+        colData(object)[[intgroup]]
+    }
+    d <- data.frame(PC5 = pca$x[, 5], PC6 = pca$x[, 6], group = group, 
+        intgroup.df, name = colnames(object))
+    if (returnData) {
+        attr(d, "percentVar") <- percentVar[5:6]
+        return(d)
+    }
+    ggplot(data = d, aes_string(x = "PC5", y = "PC6", color = "group")) + 
+        geom_point(size = 3) + xlab(paste0("PC5: ", round(percentVar[5] * 
+        100), "% variance")) + ylab(paste0("PC6: ", round(percentVar[6] * 
+        100), "% variance")) + coord_fixed()
+}
+environment(plotPCA5.6) <- asNamespace('DESeq2')
+```
+
+## PCA (continued)
+```{r}
+pc23 <- plotPCA2.3(vsd, intgroup = c("Age","LFI","Diet","group"), returnData = T) #PC2=09, PC3=05
+## plot PCA with 99% CI to visually inspect the data
+ggplot(pc23, aes(x=PC2, y=PC3, color=LFI)) +
+  geom_point(aes(fill=LFI), 
+       colour="black",pch=21, size=5)  +
+  scale_fill_manual(values = c("gold","turquoise")) +
+  xlab(paste0("PC2: 09% varience")) +
+  ylab(paste0("PC3: 05% variance")) +
+  coord_fixed() +
+  scale_color_manual(labels = c("AL","CR"),
+                    values = c("gold","turquoise")) +
+  stat_ellipse(level = 0.999) +
+  theme_bw() +
+  guides(fill=F) +
+  theme(axis.text.x=element_text(size=18), 
+        axis.title.x=element_text(size=18),
+        axis.text.y=element_text(size=18), 
+        axis.title.y=element_text(size=18),
+        legend.title = element_text(size=16),
+        legend.key.size = unit(0.6, 'cm'),
+        legend.position = c(0.91, 0.91)) +
+  scale_x_continuous(limits = c(-30, 30)) +
+  scale_y_continuous(limits = c(-30, 30))
+
+
+pc56 <- plotPCA5.6(vsd, intgroup = c("Age","LFI","Diet","group"), returnData = T) #PC5=03, PC6=03
+## plot PCA with 99% CI to visually inspect the data
+ggplot(pc56, aes(x=PC5, y=PC6, color=Diet)) +
+  geom_point(aes(fill=Diet), 
+       colour="black",pch=21, size=5)  +
+  scale_fill_manual(values = c("forestgreen","purple")) +
+  xlab(paste0("PC5: 03% varience")) +
+  ylab(paste0("PC6: 03% variance")) +
+  coord_fixed() +
+  scale_color_manual(labels = c("AL","CR"),
+                    values = c("forestgreen","purple")) +
+  stat_ellipse(level = 0.999) +
+  theme_bw() +
+  guides(fill=F) +
+  theme(axis.text.x=element_text(size=18), 
+        axis.title.x=element_text(size=18),
+        axis.text.y=element_text(size=18), 
+        axis.title.y=element_text(size=18),
+        legend.title = element_text(size=16),
+        legend.key.size = unit(0.6, 'cm'),
+        legend.position = c(0.91, 0.91)) +
+  scale_x_continuous(limits = c(-20, 20)) +
+  scale_y_continuous(limits = c(-20, 20))
+```
+
+## DESeq2
+```{r}
+myDat <- DESeq(dds2)
+## Age differences
+# AUAL vs MUAL
+summary(results(myDat, contrast = c("group", "AUAL", "MUAL"), alpha = 0.05, lfcThreshold = 0))
+AUAL_vs_MUALresSig <- subset(results(myDat, contrast = c("group", "AUAL", "MUAL"), lfcThreshold = 0), padj < 0.05)
+#############################################################################
+## LFI in Mature
+# MTAL vs MUAL
+summary(results(myDat, contrast = c("group", "MTAL", "MUAL"), alpha = 0.05, lfcThreshold = 0))
+MTAL_vs_MUALresSig <- subset(results(myDat, contrast = c("group", "MTAL", "MUAL"), lfcThreshold = 0), padj < 0.05)
+#############################################################################
+## LFI in Aged
+# ATAL vs AUAL
+summary(results(myDat, contrast = c("group", "ATAL", "AUAL"), alpha = 0.05, lfcThreshold = 0))
+ATAL_vs_AUALresSig <- subset(results(myDat, contrast = c("group", "ATAL", "AUAL"), lfcThreshold = 0), padj < 0.05)
+#############################################################################
+## Age under CR
+# AUCR vs MUCR
+summary(results(myDat, contrast = c("group", "AUCR", "MUCR"), alpha = 0.05, lfcThreshold = 0))
+AUCR_vs_MUCRresSig <- subset(results(myDat, contrast = c("group", "AUCR", "MUCR"), lfcThreshold = 0), padj < 0.05)
+#############################################################################
+## LFI in Mature CR
+# MTCR vs MUCR
+summary(results(myDat, contrast = c("group", "MTCR", "MUCR"), alpha = 0.05, lfcThreshold = 0))
+MTCR_vs_MUCRresSig <- subset(results(myDat, contrast = c("group", "MTCR", "MUCR"), lfcThreshold = 0), padj < 0.05)
+#############################################################################
+## LFI in Aged CR
+# ATCR vs AUCR
+summary(results(myDat, contrast = c("group", "ATCR", "AUCR"), alpha = 0.05, lfcThreshold = 0))
+ATCR_vs_AUCRresSig <- subset(results(myDat, contrast = c("group", "ATCR", "AUCR"), lfcThreshold = 0), padj < 0.05)
+
+
+
+#########################################################################
+## I will plot ALL DEGs
+# first make a dataframe with all the DEGS
+AUAL_vs_MUAL_DEGl2fc <- AUAL_vs_MUALresSig[2] %>% as.data.frame() %>%
+  rownames_to_column() %>% set_names(c("Gene", "AUAL_vs_MUAL_l2fc"))
+MTAL_vs_MUALDEGl2fc <- MTAL_vs_MUALresSig[2] %>% as.data.frame() %>%
+  rownames_to_column() %>% set_names(c("Gene", "MTAL_vs_MUAL_l2fc"))
+ATAL_vs_AUALDEGl2fc <- ATAL_vs_AUALresSig[2] %>% as.data.frame() %>%
+  rownames_to_column() %>% set_names(c("Gene", "ATAL_vs_AUAL_l2fc"))
+AUCR_vs_MUCRDEGl2fc <- AUCR_vs_MUCRresSig[2] %>% as.data.frame() %>%
+  rownames_to_column() %>% set_names(c("Gene", "AUCR_vs_MUCR_l2fc"))
+MTCR_vs_MUCRDEGl2fc <- MTCR_vs_MUCRresSig[2] %>% as.data.frame() %>%
+  rownames_to_column() %>% set_names(c("Gene", "MTCR_vs_MUCR_l2fc"))
+ATCR_vs_AUCRDEGl2fc <- ATCR_vs_AUCRresSig[2] %>% as.data.frame() %>%
+  rownames_to_column() %>% set_names(c("Gene", "ATCR_vs_AUCR_l2fc"))
+
+## I am going to re-name the lists to match a new nomenclature I defined in the text of the manuscript
+listInputs_1 <- list("Age AL" = AUAL_vs_MUAL_DEGl2fc$Gene, #AUAL_vs_MUAL
+                   "LFI young AL" = MTAL_vs_MUALDEGl2fc$Gene, #MTAL_vs_MUAL
+                   "LFI aged AL" = ATAL_vs_AUALDEGl2fc$Gene, #ATAL_vs_AUAL
+                   "Age CR" = AUCR_vs_MUCRDEGl2fc$Gene, #AUCR_vs_MUCR
+                   "LFI young CR" = MTCR_vs_MUCRDEGl2fc$Gene, #MTCR_vs_MUCR
+                   "LFI aged CR" = ATCR_vs_AUCRDEGl2fc$Gene) #ATCR_vs_AUCR
+upset(fromList(listInputs_1), keep.order = T, sets=c("Age CR", "Age AL", "LFI young AL", "LFI young CR", "LFI aged AL", "LFI aged CR"), order.by = "degree")
+
+AllDETs <- full_join(AUAL_vs_MUAL_DEGl2fc, MTAL_vs_MUALDEGl2fc, by = "Gene")
+AllDETs <- full_join(AllDETs, ATAL_vs_AUALDEGl2fc, by = "Gene")
+AllDETs <- full_join(AllDETs, AUCR_vs_MUCRDEGl2fc, by = "Gene")
+AllDETs <- full_join(AllDETs, MTCR_vs_MUCRDEGl2fc, by = "Gene")
+AllDETs <- full_join(AllDETs, ATCR_vs_AUCRDEGl2fc, by = "Gene")
+```
+## Annotation
+```{r}
+## annotate my genes
+library(org.Acalifornica.eg.db) # I made this Org.db using AnnotationForge
+library(org.Hs.eg.db)
+AllDETs
+keytypes(org.Acalifornica.eg.db)
+#?AnnotationDbi::ACCNUM # get textual information on what the keytypes mean
+head( keys(org.Acalifornica.eg.db, keytype="REFSEQ")) # this works. First you look at what keytypes are availible from your Org.db by running "keytypes(Org.db)" above and then copy and paste the availible keytype into the quotes above to get back representatives for that keytype ## fund this by looking at this website and looking at the Examples "## get keys based on unigene" https://www.rdocumentation.org/packages/AnnotationDbi/versions/1.34.4/topics/AnnotationDb-objects
+symbols <- mapIds(org.Acalifornica.eg.db, keys = AllDETs$Gene,
+                  column = c('GENENAME'), keytype = 'REFSEQ')
+AllDETs$geneName <- symbols 
+AllDETs <- AllDETs[,c(1,8,2,3,4,5,6,7)] #reorder the dataframe to put geneName after GeneID
+# write.xlsx(AllDETs,"/Users/school/Documents/Documents/UAB/UAB009/Results/AllDETs.xlsx", sheetName = "All_comps", append = T, row.names = F) # 152 DEGs
+```
+
+## Heatmaps of common DEGs
+```{r}
+## here I am going to make large heatmap with all comparisons to see what it looks like
+Set1 <- AllDETs 
+Set1 <- Set1[,c(1,2,3,6,4,5,7,8)]
+
+newColNames <- c("Age AL" = "AUAL_vs_MUAL_l2fc",
+                   "LFI young AL" = "MTAL_vs_MUAL_l2fc",
+                   "LFI aged AL" = "ATAL_vs_AUAL_l2fc",
+                   "Age CR" = "AUCR_vs_MUCR_l2fc", 
+                   "LFI young CR" = "MTCR_vs_MUCR_l2fc",
+                   "LFI aged CR" = "ATCR_vs_AUCR_l2fc")# I am going to rename the column headers first I made a list of what will be changed to what
+Set1 <- rename(Set1, all_of(newColNames)) # then I cahanged them
+Set1 <- Set1 %>% rowwise() %>% mutate(geneName = if_else(any(grepl(Gene, geneName)), geneName, paste(geneName,"(", Gene, ")"))) %>% as.data.frame()
+rownames(Set1) <- Set1$geneName
+colo = colorRamp2(c(-1, 0, 1), c("green", "black", "red"))
+Set1[is.na(Set1)] <- 0
+Heatmap(as.matrix(Set1[,c(-1,-2)]), col = colo, cluster_columns = F, column_names_rot = 45, row_names_gp = gpar(fontsize = 7), column_names_gp = gpar(fontsize = 12), show_heatmap_legend = F , column_names_centered = F, width = unit(5, "cm")) # the last option set my column width so I could keep a skinny heatmap and leave lots of room for annotation! This was awsome!
+
+## now can I filter my heatmap by geneName to keep only ceratin isoforms?
+Set2 <- filter(Set1, row.names(Set1) %in% c("hexokinase-2 ( XM_005089905.3 )", "hexokinase-2 ( XM_005089906.3 )", "hexokinase-2 ( XM_035970136.1 )"))
+colo = colorRamp2(c(-40, 0, 40), c("green", "black", "red"))
+Set2[is.na(Set2)] <- 0
+Heatmap(as.matrix(Set2[,c(-1,-2)]), col = colo, cluster_columns = F, column_names_rot = 45, row_names_gp = gpar(fontsize = 8), column_names_gp = gpar(fontsize = 9), show_heatmap_legend = F , column_names_centered = F, width = unit(5, "cm"), height = unit(5, "cm"))
+
+
+## now can I filter my heatmap by geneName to keep only ceratin isoforms?
+# yes, i did it above for hexikinase and I will do it now for stathmin
+Set3 <- filter(Set1, row.names(Set1) %in% c("stathmin ( XM_005098475.3 )", "stathmin ( XM_035969792.1 )", "stathmin ( XM_035969793.1 )", "stathmin ( XM_013082605.2 )", "stathmin ( XM_005098473.3 )"))
+colo = colorRamp2(c(-40, 0, 40), c("green", "black", "red"))
+Set3[is.na(Set3)] <- 0
+Heatmap(as.matrix(Set3[,c(-1,-2)]), col = colo, cluster_columns = F, column_names_rot = 45, row_names_gp = gpar(fontsize = 8), column_names_gp = gpar(fontsize = 9), show_heatmap_legend = F , column_names_centered = F, width = unit(5, "cm"), height = unit(5, "cm"))
+```
+
+## Hiearchcal clusterng
+```{r}
+# rlog_out <- rlog(dds2, blind = F)
+# dds.1 <- estimateSizeFactors(dds2)
+# select.1 <- order(rowMeans(counts(dds.1, normalized=T)), decreasing = T)
+# df <- as.data.frame(colData(dds2)[,c("Age","LFI","Diet")])
+# mat1 <- assay(rlog_out[1:2000])
+# colnames(mat1)
+# mat1.scaled <- t(apply(mat1, 1, scale))
+# colnames(mat1.scaled) <- colnames(mat1)
+# dim(mat1.scaled) #2,000 genes, 45 samples
+# pheatmap(mat1.scaled, annotation_col = df)
+# # above was to test if samples would cluster according to treatment if global gene expression was graphed. I could only graph 2000 genes though and no such luck in sample grouping
+
+
+## Below is graphing only the DEGs and seeing how samples cluster
+rlog_out2 <- rlog(dds2, blind = F)
+mat1.2 <- assay(rlog_out2)[AllDEGs$Gene,]
+colnames(mat1.2)
+df2 <- as.data.frame(colData(dds2)[,c("Age","LFI","Diet")])
+mat1.2scaled <- t(apply(mat1.2, 1, scale))
+colnames(mat1.2scaled) <- colnames(mat1.2)
+dim(mat1.2scaled)
+pheatmap(mat1.2scaled, annotation_col = df2, cluster_rows = T, cluster_cols = T, show_rownames = F, cutree_rows = 5)
+```
+
+## Functional analyses
+#####GO (gse)
+```{r}
+library(clusterProfiler)
+## I was having a problem with reproduceability while running gene-set enrichment below. I was getting different numbers of gene ontology terms each time I re-ran the assay. So I looked it up and there may be some sort of seed issue (some randomness) that changes each time I run it: (https://support.bioconductor.org/p/99810/), (https://github.com/YuLab-SMU/clusterProfiler/issues/190).
+### I will attempt to set the seed using 'set.seed()' (https://www.statology.org/set-seed-in-r/)
+set.seed(1234) # setting the seed to make the below code reproducible
+## Age differences
+# AUAL vs MUAL
+AUAL_MUAL_GO <- results(myDat, contrast = c("group", "AUAL", "MUAL"), alpha = 0.05, lfcThreshold = 0)
+AgeAL_GO <- as.data.frame(AUAL_MUAL_GO)
+AgeAL_GO$Gene <- rownames(AgeAL_GO)
+
+original_gene_list_AgeAL <- AgeAL_GO$log2FoldChange
+names(original_gene_list_AgeAL) <- AgeAL_GO$Gene
+gene_list_AgeAL <- na.omit(original_gene_list_AgeAL)
+gene_list_AgeAL = sort(gene_list_AgeAL, decreasing = T)
+
+gse_AgeAL <- gseGO(geneList = gene_list_AgeAL, #[1st pass: 185, 2nd pass: 189] (before seed was set), 3rd pass: 209 (after seed.set) 4th pass: 209 again! (I think this worked) 5th pass: 209 terms (after seed.set)
+                   ont = "ALL",
+                   keyType = "SYMBOL",
+                   minGSSize = 3,
+                   maxGSSize = 800,
+                   pvalueCutoff = 0.05,
+                   verbose = TRUE,
+                   OrgDb = org.Acalifornica.eg.db,
+                   pAdjustMethod = "none",
+                   seed = TRUE)
+## graph
+ggplot(gse_AgeAL, showCategory=10, split="ONTOLOGY", aes(x = NES, y = Description, fill=qvalue)) +
+  geom_col() + facet_grid(ONTOLOGY~., scale="free") +
+  theme_bw()# I think this the graph I want! This shows me the top whatever I choose in 'showCategory' the GO are normalized so if the bar goes to negative they are suppressed and if bar goes positive they are activated and this is split by ontology CC, MF, and BP
+## This basically combines the two graphs above
+## Saved as PDF 6x6 (landscape)
+
+#############################################################################
+## LFI in Mature
+# MTAL vs MUAL
+MTAL_MUAL_GO <- results(myDat, contrast = c("group", "MTAL", "MUAL"), alpha = 0.05, lfcThreshold = 0)
+LFIyoungAL_GO <- as.data.frame(MTAL_MUAL_GO)
+LFIyoungAL_GO$Gene <- rownames(LFIyoungAL_GO) #11,852 genes
+
+original_gene_list_LFIyoungAL <- LFIyoungAL_GO$log2FoldChange #11,852 genes
+names(original_gene_list_LFIyoungAL) <- LFIyoungAL_GO$Gene #11,852 genes
+gene_list_LFIyoungAL <- na.omit(original_gene_list_LFIyoungAL) #11,852 genes
+gene_list_LFIyoungAL = sort(gene_list_LFIyoungAL, decreasing = T) #11,852 genes
+
+gse_LFIyoungAL <- gseGO(geneList = gene_list_LFIyoungAL, # 142 terms after seed.set
+                   ont = "ALL",
+                   keyType = "SYMBOL",
+                   minGSSize = 3,
+                   maxGSSize = 800,
+                   pvalueCutoff = 0.05,
+                   verbose = TRUE,
+                   OrgDb = org.Acalifornica.eg.db,
+                   pAdjustMethod = "none",
+                   seed = TRUE) 
+## graph
+ggplot(gse_LFIyoungAL, showCategory=10, split="ONTOLOGY", aes(x = NES, y = Description, fill=qvalue)) +
+  geom_col() + facet_grid(ONTOLOGY~., scale="free") +
+  theme_bw() ## Saved as PDF 6x7 (landscape)
+#############################################################################
+## LFI in Aged
+# ATAL vs AUAL
+ATAL_AUAL_GO <- results(myDat, contrast = c("group", "ATAL", "AUAL"), alpha = 0.05, lfcThreshold = 0)
+LFIagedAL_GO <- as.data.frame(ATAL_AUAL_GO)
+LFIagedAL_GO$Gene <- rownames(LFIagedAL_GO) #11,852 genes
+
+original_gene_list_LFIagedAL <- LFIagedAL_GO$log2FoldChange #11,852 genes
+names(original_gene_list_LFIagedAL) <- LFIagedAL_GO$Gene #11,852 genes
+gene_list_LFIagedAL <- na.omit(original_gene_list_LFIagedAL) #11,852 genes
+gene_list_LFIagedAL = sort(gene_list_LFIagedAL, decreasing = T) #11,852 genes
+
+gse_LFIagedAL <- gseGO(geneList = gene_list_LFIagedAL, #188 GO terms after seed.set
+                   ont = "ALL",
+                   keyType = "SYMBOL",
+                   minGSSize = 3,
+                   maxGSSize = 800,
+                   pvalueCutoff = 0.05,
+                   verbose = TRUE,
+                   OrgDb = org.Acalifornica.eg.db,
+                   pAdjustMethod = "none",
+                   seed = TRUE) 
+## graph
+ggplot(gse_LFIagedAL, showCategory=10, split="ONTOLOGY", aes(x = NES, y = Description, fill=qvalue)) +
+  geom_col() + facet_grid(ONTOLOGY~., scale="free") +
+  theme_bw() ## Saved as PDF 6x6 (landscape)
+#############################################################################
+## Age under CR
+# AUCR vs MUCR
+AUCR_MUCR_GO <- results(myDat, contrast = c("group", "AUCR", "MUCR"), alpha = 0.05, lfcThreshold = 0)
+AgeCR_GO <- as.data.frame(AUCR_MUCR_GO)
+AgeCR_GO$Gene <- rownames(AgeCR_GO)
+
+original_gene_list_AgeCR <- AgeCR_GO$log2FoldChange
+names(original_gene_list_AgeCR) <- AgeCR_GO$Gene
+gene_list_AgeCR <- na.omit(original_gene_list_AgeCR)
+gene_list_AgeCR = sort(gene_list_AgeCR, decreasing = T)
+
+gse_AgeCR <- gseGO(geneList = gene_list_AgeCR, #298 GO terms after seed.set
+                   ont = "ALL",
+                   keyType = "SYMBOL",
+                   minGSSize = 3,
+                   maxGSSize = 800,
+                   pvalueCutoff = 0.05,
+                   verbose = TRUE,
+                   OrgDb = org.Acalifornica.eg.db,
+                   pAdjustMethod = "none",
+                   seed = TRUE)
+## graph
+ggplot(gse_AgeCR, showCategory=10, split="ONTOLOGY", aes(x = NES, y = Description, fill=qvalue)) +
+  geom_col() + facet_grid(ONTOLOGY~., scale="free") +
+  theme_bw() ## Saved as PDF 6x6 (landscape)
+#############################################################################
+## LFI in Mature CR
+# MTCR vs MUCR
+MTCR_MUCR_GO <- results(myDat, contrast = c("group", "MTCR", "MUCR"), alpha = 0.05, lfcThreshold = 0)
+LFIyoungCR_GO <- as.data.frame(MTCR_MUCR_GO)
+LFIyoungCR_GO$Gene <- rownames(LFIyoungCR_GO)
+
+original_gene_list_LFIyoungCR <- LFIyoungCR_GO$log2FoldChange
+names(original_gene_list_LFIyoungCR) <- LFIyoungCR_GO$Gene
+gene_list_LFIyoungCR <- na.omit(original_gene_list_LFIyoungCR)
+gene_list_LFIyoungCR = sort(gene_list_LFIyoungCR, decreasing = T)
+
+gse_LFIyoungCR <- gseGO(geneList = gene_list_LFIyoungCR, # 117 terms after seed.set
+                   ont = "ALL",
+                   keyType = "SYMBOL",
+                   minGSSize = 3,
+                   maxGSSize = 800,
+                   pvalueCutoff = 0.05,
+                   verbose = TRUE,
+                   OrgDb = org.Acalifornica.eg.db,
+                   pAdjustMethod = "none",
+                   seed = TRUE)
+## graph
+ggplot(gse_LFIyoungCR, showCategory=10, split="ONTOLOGY", aes(x = NES, y = Description, fill=qvalue)) +
+  geom_col() + facet_grid(ONTOLOGY~., scale="free") +
+  theme_bw() ## Saved as PDF 6x9 (landscape)
+#############################################################################
+## LFI in Aged CR
+# ATCR vs AUCR
+ATCR_AUCR_GO <- results(myDat, contrast = c("group", "ATCR", "AUCR"), alpha = 0.05, lfcThreshold = 0)
+LFIageCR_GO <- as.data.frame(ATCR_AUCR_GO)
+LFIageCR_GO$Gene <- rownames(LFIageCR_GO)
+
+original_gene_list_LFIageCR <- LFIageCR_GO$log2FoldChange
+names(original_gene_list_LFIageCR) <- LFIageCR_GO$Gene
+gene_list_LFIageCR <- na.omit(original_gene_list_LFIageCR)
+gene_list_LFIageCR = sort(gene_list_LFIageCR, decreasing = T)
+
+gse_LFIageCR <- gseGO(geneList = gene_list_LFIageCR, #181 terms after seed.set
+                   ont = "ALL",
+                   keyType = "SYMBOL",
+                   minGSSize = 3,
+                   maxGSSize = 800,
+                   pvalueCutoff = 0.05,
+                   verbose = TRUE,
+                   OrgDb = org.Acalifornica.eg.db,
+                   pAdjustMethod = "none",
+                   seed = TRUE)
+## graph
+ggplot(gse_LFIageCR, showCategory=10, split="ONTOLOGY", aes(x = NES, y = Description, fill=qvalue)) +
+  geom_col() + facet_grid(ONTOLOGY~., scale="free") +
+  theme_bw() ## Saved as PDF 6x5 (landscape)
+```
+
+###### Compare together
+```{r}
+#########################################################################
+## I will plot ALL GO terms from all comparisons
+# first make a dataframe with all the GO terms
+AgeAL_GOterms <- as.data.frame(gse_AgeAL)[,c(3,6)] %>% 'rownames<-'(NULL) %>%
+  set_names(c("GO.term", "AgeAL_NES"))
+LFIyoungAL_GOterms <- as.data.frame(gse_LFIyoungAL)[,c(3,6)] %>% 'rownames<-'(NULL) %>%
+  set_names(c("GO.term", "LFIyoungAL_NES"))
+LFIagedAL_GOterms <- as.data.frame(gse_LFIagedAL)[,c(3,6)] %>% 'rownames<-'(NULL) %>%
+  set_names(c("GO.term", "LFIagedAL_NES"))
+AgeCR_GOterms <- as.data.frame(gse_AgeCR)[,c(3,6)] %>% 'rownames<-'(NULL) %>%
+  set_names(c("GO.term", "AgeCR_NES"))
+LFIyoungCR_GOterms <- as.data.frame(gse_LFIyoungCR)[,c(3,6)] %>% 'rownames<-'(NULL) %>%
+  set_names(c("GO.term", "LFIyoungCR_NES"))
+LFIageCR_GOterms <- as.data.frame(gse_LFIageCR)[,c(3,6)] %>% 'rownames<-'(NULL) %>%
+  set_names(c("GO.term", "LFIageCR_NES"))
+
+listInputs_2 <- list("AgeAL_GOterms" = AgeAL_GOterms$GO.term,
+                   "LFIyoungAL_GOterms" = LFIyoungAL_GOterms$GO.term,
+                   "LFIagedAL_GOterms" = LFIagedAL_GOterms$GO.term,
+                   "AgeCR_GOterms" = AgeCR_GOterms$GO.term,
+                   "LFIyoungCR_GOterms" = LFIyoungCR_GOterms$GO.term,
+                   "LFIageCR_GOterms" = LFIageCR_GOterms$GO.term)
+upset(fromList(listInputs_2), sets=c("AgeAL_GOterms", "LFIyoungAL_GOterms", "LFIagedAL_GOterms", "AgeCR_GOterms", "LFIyoungCR_GOterms", "LFIageCR_GOterms"), order.by = "degree")
+
+AllGOterms <- full_join(AgeAL_GOterms, LFIyoungAL_GOterms, by = "GO.term")
+AllGOterms <- full_join(AllGOterms, LFIagedAL_GOterms, by = "GO.term")
+AllGOterms <- full_join(AllGOterms, AgeCR_GOterms, by = "GO.term")
+AllGOterms <- full_join(AllGOterms, LFIyoungCR_GOterms, by = "GO.term")
+AllGOterms <- full_join(AllGOterms, LFIageCR_GOterms, by = "GO.term")
+
+# write.xlsx(AllGOterms,"/Users/school/Documents/UAB/UAB009/Results/AllFunctionalAnalyses.xlsx", sheetName = "All_GOs", append = F, row.names = F) # 889 GO terms
+```
+
+###KEGG (gse)
+###### making 'protein to gene to transcript' dataframes for Aplysia
+```{r}
+## Make protein to gene to transcript dataframe for fish (X_maculatus)
+# load in my gff
+Apl_GFF = read.delim("/Users/school/Documents/UAB/UAB009/genome/AplCal3.0_GFF.gff", header = F, stringsAsFactors = F, comment.char = "#")
+# create a dataframe of protein, gene, and transcript
+gene2tx2protein_Apl <- inner_join(
+# extract transcript to protein mapping
+Apl_GFF %>%
+  filter(V3=="CDS") %>%
+  select(V9) %>%
+  rowwise() %>%
+  mutate(transcript = str_extract(V9,"Parent=rna-[aA-zZ,0-9]*") %>% str_remove(.,"Parent=rna-"),
+         protein = str_extract(V9,"protein_id=[aA-zZ,0-9]*") %>% str_remove(.,"protein_id=")) %>%
+  select(-V9) %>%
+  distinct(),
+# now extract gene to transcript mapping
+Apl_GFF %>%
+  filter(V3=="mRNA") %>%
+  select(V9) %>%
+  rowwise() %>%
+  mutate(gene = str_extract(V9,"Parent=gene-[aA-zZ,0-9]*") %>% str_remove(.,"Parent=gene-"),
+         transcript = str_extract(V9,"transcript_id=[aA-zZ,0-9]*") %>% str_remove(.,"transcript_id="),
+         tx_version=str_extract(V9,"Name=[aA-zZ,0-9,.]*") %>% str_remove(.,"Name=")) %>%
+  select(-V9) %>%
+  distinct()
+)
+```
+
+###### Gene Set Enrichment
+```{r}
+AplysiaKOterms <- read.delim("/Users/school/Documents/UAB/UAB009/GhostKOALA/user_ko.txt", header = F, col.names = c("protein", "ko")) %>% as.data.frame() %>% mutate(protein = gsub("\\.[0-9]","", protein)) # 26,659 entries
+gene2tx2protein2ko_Apl <- full_join(gene2tx2protein_Apl, AplysiaKOterms, by="protein")
+
+## Age differences
+# AUAL vs MUAL
+gene_list_AgeAL_df <- as.data.frame(gene_list_AgeAL) %>% rownames_to_column("gene") #11,852 genes
+AgeAL_KEGG <- merge(gene_list_AgeAL_df, gene2tx2protein2ko_Apl, by="gene") #17,940 genes
+AgeAL_KEGG2 <- AgeAL_KEGG[!duplicated(AgeAL_KEGG$gene),] #11,422 genes
+df_AgeAL = AgeAL_GO[AgeAL_GO$Gene %in% AgeAL_KEGG2$gene,] #11,422 genes
+df_AgeAL$ko = AgeAL_KEGG2$ko #11,422 genes (just added ko column here)
+AgeAL_keggGeneList <- df_AgeAL$log2FoldChange #11,422 genes (made list of lfc)
+names(AgeAL_keggGeneList) <- df_AgeAL$ko #11,422 genes (named all lfc with ko for that gene)
+AgeAL_keggGeneList <- na.omit(AgeAL_keggGeneList) #11,422 genes (no NA)
+AgeAL_keggGeneList = sort(AgeAL_keggGeneList, decreasing = TRUE) #(sorted the lfc in decreasing order)
+
+kk2_AgeAL <- gseKEGG(geneList = AgeAL_keggGeneList,
+                     organism = "ko", #used ko terms from ghostKOWALA since Aplysia is not and available organism on KEGG website
+                     minGSSize = 3,
+                     maxGSSize = 800,
+                     pvalueCutoff = 0.05,
+                     pAdjustMethod = "none",
+                     keyType = "kegg",
+                     seed = TRUE)
+
+dotplot(kk2_AgeAL, showCategory = 10, title = "Enriched Pathways" , split=".sign") + facet_grid(.~.sign) ## Saved as PDF 6x6 (landscape)
+
+#############################################################################
+## LFI in Mature
+# MTAL vs MUAL
+gene_list_LFIyoungAL_df <- as.data.frame(gene_list_LFIyoungAL) %>% rownames_to_column("gene") #11,852 genes
+LFIyoungAL_KEGG <- merge(gene_list_LFIyoungAL_df, gene2tx2protein2ko_Apl, by="gene") #17,940 genes
+LFIyoungAL_KEGG2 <- LFIyoungAL_KEGG[!duplicated(LFIyoungAL_KEGG$gene),] #11,422 genes
+df_LFIyoungAL = LFIyoungAL_GO[LFIyoungAL_GO$Gene %in% LFIyoungAL_KEGG2$gene,] #11,422 genes
+df_LFIyoungAL$ko = LFIyoungAL_KEGG2$ko #11,422 genes (just added ko column here)
+LFIyoungAL_keggGeneList <- df_LFIyoungAL$log2FoldChange #11,422 genes (made list of lfc)
+names(LFIyoungAL_keggGeneList) <- df_LFIyoungAL$ko #11,422 genes (named all lfc with ko for that gene)
+LFIyoungAL_keggGeneList <- na.omit(LFIyoungAL_keggGeneList) #11,422 genes (no NA)
+LFIyoungAL_keggGeneList = sort(LFIyoungAL_keggGeneList, decreasing = TRUE) #(sorted the lfc in decreasing order)
+
+kk2_LFIyoungAL <- gseKEGG(geneList = LFIyoungAL_keggGeneList,
+                     organism = "ko", #used ko terms from ghostKOWALA since Aplysia is not and available organism on KEGG website
+                     minGSSize = 3,
+                     maxGSSize = 800,
+                     pvalueCutoff = 0.05,
+                     pAdjustMethod = "none",
+                     keyType = "kegg",
+                     seed = TRUE)
+
+dotplot(kk2_LFIyoungAL, showCategory = 10, title = "Enriched Pathways" , split=".sign") + facet_grid(.~.sign) ## Saved as PDF 6x6 (landscape)
+
+#############################################################################
+## LFI in Aged
+# ATAL vs AUAL
+gene_list_LFIagedAL_df <- as.data.frame(gene_list_LFIagedAL) %>% rownames_to_column("gene") #11,852 genes
+LFIagedAL_KEGG <- merge(gene_list_LFIagedAL_df, gene2tx2protein2ko_Apl, by="gene") #17,940 genes
+LFIagedAL_KEGG2 <- LFIagedAL_KEGG[!duplicated(LFIagedAL_KEGG$gene),] #11,422 genes
+df_LFIagedAL = LFIagedAL_GO[LFIagedAL_GO$Gene %in% LFIagedAL_KEGG2$gene,] #11,422 genes
+df_LFIagedAL$ko = LFIagedAL_KEGG2$ko #11,422 genes (just added ko column here)
+LFIagedAL_keggGeneList <- df_LFIagedAL$log2FoldChange #11,422 genes (made list of lfc)
+names(LFIagedAL_keggGeneList) <- df_LFIagedAL$ko #11,422 genes (named all lfc with ko for that gene)
+LFIagedAL_keggGeneList <- na.omit(LFIagedAL_keggGeneList) #11,422 genes (no NA)
+LFIagedAL_keggGeneList = sort(LFIagedAL_keggGeneList, decreasing = TRUE) #(sorted the lfc in decreasing order)
+
+kk2_LFIagedAL <- gseKEGG(geneList = LFIagedAL_keggGeneList,
+                     organism = "ko", #used ko terms from ghostKOWALA since Aplysia is not and available organism on KEGG website
+                     minGSSize = 3,
+                     maxGSSize = 800,
+                     pvalueCutoff = 0.05,
+                     pAdjustMethod = "none",
+                     keyType = "kegg",
+                     seed = TRUE)
+
+dotplot(kk2_LFIagedAL, showCategory = 10, title = "Enriched Pathways" , split=".sign") + facet_grid(.~.sign) ## Saved as PDF 6x6 (landscape)
+
+#############################################################################
+## Age under CR
+# AUCR vs MUCR
+gene_list_AgeCR_df <- as.data.frame(gene_list_AgeCR) %>% rownames_to_column("gene") #11,852 genes
+AgeCR_KEGG <- merge(gene_list_AgeCR_df, gene2tx2protein2ko_Apl, by="gene") #17,940 genes
+AgeCR_KEGG2 <- AgeCR_KEGG[!duplicated(AgeCR_KEGG$gene),] #11,422 genes
+df_AgeCR = AgeCR_GO[AgeCR_GO$Gene %in% AgeCR_KEGG2$gene,] #11,422 genes
+df_AgeCR$ko = AgeCR_KEGG2$ko #11,422 genes (just added ko column here)
+AgeCR_keggGeneList <- df_AgeCR$log2FoldChange #11,422 genes (made list of lfc)
+names(AgeCR_keggGeneList) <- df_AgeCR$ko #11,422 genes (named all lfc with ko for that gene)
+AgeCR_keggGeneList <- na.omit(AgeCR_keggGeneList) #11,422 genes (no NA)
+AgeCR_keggGeneList = sort(AgeCR_keggGeneList, decreasing = TRUE) #(sorted the lfc in decreasing order)
+
+kk2_AgeCR <- gseKEGG(geneList = AgeCR_keggGeneList,
+                     organism = "ko", #used ko terms from ghostKOWALA since Aplysia is not and available organism on KEGG website
+                     minGSSize = 3,
+                     maxGSSize = 800,
+                     pvalueCutoff = 0.05,
+                     pAdjustMethod = "none",
+                     keyType = "kegg",
+                     seed = TRUE)
+
+dotplot(kk2_AgeCR, showCategory = 10, title = "Enriched Pathways" , split=".sign") + facet_grid(.~.sign) ## Saved as PDF 6x6 (landscape)
+
+#############################################################################
+## LFI in Mature CR
+# MTCR vs MUCR
+gene_list_LFIyoungCR_df <- as.data.frame(gene_list_LFIyoungCR) %>% rownames_to_column("gene") #11,852 genes
+LFIyoungCR_KEGG <- merge(gene_list_LFIyoungCR_df, gene2tx2protein2ko_Apl, by="gene") #17,940 genes
+LFIyoungCR_KEGG2 <- LFIyoungCR_KEGG[!duplicated(LFIyoungCR_KEGG$gene),] #11,422 genes
+df_LFIyoungCR = LFIyoungCR_GO[LFIyoungCR_GO$Gene %in% LFIyoungCR_KEGG2$gene,] #11,422 genes
+df_LFIyoungCR$ko = LFIyoungCR_KEGG2$ko #11,422 genes (just added ko column here)
+LFIyoungCR_keggGeneList <- df_LFIyoungCR$log2FoldChange #11,422 genes (made list of lfc)
+names(LFIyoungCR_keggGeneList) <- df_LFIyoungCR$ko #11,422 genes (named all lfc with ko for that gene)
+LFIyoungCR_keggGeneList <- na.omit(LFIyoungCR_keggGeneList) #11,422 genes (no NA)
+LFIyoungCR_keggGeneList = sort(LFIyoungCR_keggGeneList, decreasing = TRUE) #(sorted the lfc in decreasing order)
+
+kk2_LFIyoungCR <- gseKEGG(geneList = LFIyoungCR_keggGeneList,
+                     organism = "ko", #used ko terms from ghostKOWALA since Aplysia is not and available organism on KEGG website
+                     minGSSize = 3,
+                     maxGSSize = 800,
+                     pvalueCutoff = 0.05,
+                     pAdjustMethod = "none",
+                     keyType = "kegg",
+                     seed = TRUE)
+
+dotplot(kk2_LFIyoungCR, showCategory = 10, title = "Enriched Pathways" , split=".sign") + facet_grid(.~.sign) ## Saved as PDF 6x6 (landscape)
+
+#############################################################################
+## LFI in Aged CR
+# ATCR vs AUCR
+gene_list_LFIageCR_df <- as.data.frame(gene_list_LFIageCR) %>% rownames_to_column("gene") #11,852 genes
+LFIageCR_KEGG <- merge(gene_list_LFIageCR_df, gene2tx2protein2ko_Apl, by="gene") #17,940 genes
+LFIageCR_KEGG2 <- LFIageCR_KEGG[!duplicated(LFIageCR_KEGG$gene),] #11,422 genes
+df_LFIageCR = LFIageCR_GO[LFIageCR_GO$Gene %in% LFIageCR_KEGG2$gene,] #11,422 genes
+df_LFIageCR$ko = LFIageCR_KEGG2$ko #11,422 genes (just added ko column here)
+LFIageCR_keggGeneList <- df_LFIageCR$log2FoldChange #11,422 genes (made list of lfc)
+names(LFIageCR_keggGeneList) <- df_LFIageCR$ko #11,422 genes (named all lfc with ko for that gene)
+LFIageCR_keggGeneList <- na.omit(LFIageCR_keggGeneList) #11,422 genes (no NA)
+LFIageCR_keggGeneList = sort(LFIageCR_keggGeneList, decreasing = TRUE) #(sorted the lfc in decreasing order)
+
+kk2_LFIageCR <- gseKEGG(geneList = LFIageCR_keggGeneList,
+                     organism = "ko", #used ko terms from ghostKOWALA since Aplysia is not and available organism on KEGG website
+                     minGSSize = 3,
+                     maxGSSize = 800,
+                     pvalueCutoff = 0.05,
+                     pAdjustMethod = "none",
+                     keyType = "kegg",
+                     seed = TRUE)
+
+dotplot(kk2_LFIageCR, showCategory = 10, title = "Enriched Pathways" , split=".sign") + facet_grid(.~.sign) ## Saved as PDF 6x6 (landscape)
+
+```
+
+###### Compare together
+```{r}
+#########################################################################
+## I will plot ALL GO terms from all comparisons
+# first make a dataframe with all the GO terms
+AgeAL_KEGGpathways <- as.data.frame(kk2_AgeAL)[,c(2,5)] %>% 'rownames<-'(NULL) %>%
+  set_names(c("KEGG.pathway", "AgeAL_NES"))
+LFIyoungAL_KEGGpathways <- as.data.frame(kk2_LFIyoungAL)[,c(2,5)] %>% 'rownames<-'(NULL) %>%
+  set_names(c("KEGG.pathway", "LFIyoungAL_NES"))
+LFIagedAL_KEGGpathways <- as.data.frame(kk2_LFIagedAL)[,c(2,5)] %>% 'rownames<-'(NULL) %>%
+  set_names(c("KEGG.pathway", "LFIagedAL_NES"))
+AgeCR_KEGGpathways <- as.data.frame(kk2_AgeCR)[,c(2,5)] %>% 'rownames<-'(NULL) %>%
+  set_names(c("KEGG.pathway", "AgeCR_NES"))
+LFIyoungCR_KEGGpathways <- as.data.frame(kk2_LFIyoungCR)[,c(2,5)] %>% 'rownames<-'(NULL) %>%
+  set_names(c("KEGG.pathway", "LFIyoungCR_NES"))
+LFIageCR_KEGGpathways <- as.data.frame(kk2_LFIageCR)[,c(2,5)] %>% 'rownames<-'(NULL) %>%
+  set_names(c("KEGG.pathway", "LFIageCR_NES"))
+
+listInputs_3 <- list("AgeAL_KEGGpathways" = AgeAL_KEGGpathways$KEGG.pathway,
+                   "LFIyoungAL_KEGGpathways" = LFIyoungAL_KEGGpathways$KEGG.pathway,
+                   "LFIagedAL_KEGGpathways" = LFIagedAL_KEGGpathways$KEGG.pathway,
+                   "AgeCR_KEGGpathways" = AgeCR_KEGGpathways$KEGG.pathway,
+                   "LFIyoungCR_KEGGpathways" = LFIyoungCR_KEGGpathways$KEGG.pathway,
+                   "LFIageCR_KEGGpathways" = LFIageCR_KEGGpathways$KEGG.pathway)
+upset(fromList(listInputs_3), sets=c("AgeAL_KEGGpathways", "LFIyoungAL_KEGGpathways", "LFIagedAL_KEGGpathways", "AgeCR_KEGGpathways", "LFIyoungCR_KEGGpathways", "LFIageCR_KEGGpathways"), order.by = "degree")
+
+AllKEGGpathways <- full_join(AgeAL_KEGGpathways, LFIyoungAL_KEGGpathways, by = "KEGG.pathway")
+AllKEGGpathways <- full_join(AllKEGGpathways, LFIagedAL_KEGGpathways, by = "KEGG.pathway")
+AllKEGGpathways <- full_join(AllKEGGpathways, AgeCR_KEGGpathways, by = "KEGG.pathway")
+AllKEGGpathways <- full_join(AllKEGGpathways, LFIyoungCR_KEGGpathways, by = "KEGG.pathway")
+AllKEGGpathways <- full_join(AllKEGGpathways, LFIageCR_KEGGpathways, by = "KEGG.pathway")
+
+# write.xlsx(AllKEGGpathways,"/Users/school/Documents/UAB/UAB009/Results/AllFunctionalAnalyses.xlsx", sheetName = "All_KEGGs", append = T, row.names = F) # 176 KEGG pathways
+```
+
+#_____________________
+#_____________________
+# DEXseq (Vingette)
+```{r}
+# here I am going to perform DEXseq to properly test for differential transcript usage using the workflow in the manuscript: Swimming downstream: statistical analysis of differential transcript usage following Salmon quantification (2018) Love et al.
+# manuscript -> https://pubmed.ncbi.nlm.nih.gov/30356428/
+# Vingette -> https://www.bioconductor.org/packages/release/workflows/vignettes/rnaseqDTU/inst/doc/rnaseqDTU.html
+```
+## ### try with thier data
+```{r}
+library(rnaseqDTU)
+csv.dirV <- system.file("extdata", package="rnaseqDTU")
+
+sampsV <- read.csv(file.path(csv.dirV, "samples.csv"))
+head(sampsV)
+
+sampsV$condition <- factor(sampsV$condition)
+table(sampsV$condition)
+
+filesV <- file.path("/path/to/dir", sampsV$sample_id, "quant.sf")
+names(filesV) <- sampsV$sample_id
+head(filesV)
+
+library(tximport)
+txiV <- tximport(filesV, type="salmon", txOut=TRUE,
+                countsFromAbundance="scaledTPM")
+ctsV <- txiV$counts
+ctsV <- ctsV[rowSums(ctsV) > 0,]
+
+library(GenomicFeatures)
+gtfV <- "gencode.v28.annotation.gtf"
+txdb.filenameV <- "gencode.v28.annotation.sqlite"
+txdbV <- makeTxDbFromGFF(gtfV)
+saveDb(txdbV, txdb.filenameV)
+
+txdbV <- loadDb(txdb.filenameV)
+txdfV <- select(txdbV, keys(txdbV, "GENEID"), "TXNAME", "GENEID")
+tabV <- table(txdfV$GENEID)
+txdfV$ntx <- tabV[match(txdfV$GENEID, names(tabV))]
+
+data(salmon_cts)
+cts[1:3,1:3]
+
+range(colSums(cts)/1e6)
+
+data(simulate)
+head(txdfV)
+
+all(rownames(cts) %in% txdfV$TXNAME)
+
+txdfV <- txdfV[match(rownames(cts),txdfV$TXNAME),]
+all(rownames(cts) == txdfV$TXNAME)
+
+countsV <- data.frame(gene_id=txdfV$GENEID,
+                     feature_id=txdfV$TXNAME,
+                     cts)
+
+library(DRIMSeq)
+dV <- dmDSdata(counts=countsV, samples=sampsV)
+dV
+
+methods(class=class(dV))
+
+counts(dV[1,])[,1:4]
+
+nV <- 12
+n.smallV <- 6
+dV <- dmFilter(dV,
+              min_samps_feature_expr=n.small, min_feature_expr=10,
+              min_samps_feature_prop=n.small, min_feature_prop=0.1,
+              min_samps_gene_expr=n, min_gene_expr=10)
+dV
+
+table(table(counts(dV)$gene_id))
+
+design_fullV <- model.matrix(~condition, data=DRIMSeq::samples(dV))
+colnames(design_fullV)
+
+dV <- dV[1:250,]
+7764 / 250
+
+set.seed(1)
+  dV <- dmPrecision(dV, design=design_fullV)
+  dV <- dmFit(dV, design=design_fullV)
+  dV <- dmTest(dV, coef="condition2")
+  
+resV <- DRIMSeq::results(dV)
+head(resV)
+
+res.txpV <- DRIMSeq::results(dV, level="feature")
+head(res.txpV)
+
+no.na <- function(x) ifelse(is.na(x), 1, x)
+resV$pvalue <- no.na(resV$pvalue)
+res.txpV$pvalue <- no.na(res.txpV$pvalue)
+
+idxV <- which(resV$adj_pvalue < 0.05)[1]
+resV[idxV,]
+
+plotProportions(dV, resV$gene_id[idxV], "condition")
+```
+
+# __________________
+# Testing w/My data
+## Importing data
+```{r}
+## setting up our metadata table
+sample_table = read.csv("/Users/school/Projects/CR/samples.txt", header = T, stringsAsFactors = T)
+sample_table$P_SAV <- as.character(sample_table$P_SAV)
+sample_table$Age <- factor(sample_table$Age, levels = c("M","A") )
+sample_table$TRT <- factor(sample_table$TRT, levels = c("U", "T"))
+names(sample_table)[names(sample_table) == "TRT"] <- "LFI"
+row.names(sample_table)=sample_table$Sample_ID
+# below I create a 'group' column in the metadata
+sample_table$group <- factor(paste0(sample_table$Age, sample_table$LFI, sample_table$Diet))
+# checking the levels of 'group' column below
+levels(sample_table$group)
+sample_table$group <- relevel(sample_table$group, ref = "MUCR")
+
+# Sample 840 (Aged, Trained, CR ; ATCR) is technically a dud since its TTIM on day1 = 68 sec. This animal was retrained and dissected because we were short on aged CR animals. Still, I think it best to exclude this sample.
+# Samples 809 and 805 were determined to be outliers after performing a Robust PCA. Please see the code chunk above this one for more context. Both samples were (Mature, Untrained, CR ; MUCR)
+# I will delete this sample from the metadata file which will be used to import the sample data, so this sample will not be imported
+
+metadata <- sample_table[!(sample_table$Sample_ID %in% c("840","809","805")),]
+#############################
+## making our sample paths to quant files
+
+paste0('/Users/school/Projects/CR/quants/', 
+       pull(metadata, RNAseq_ID), '/quant.sf')
+sample_files = paste0('/Users/school/Projects/CR/quants/',
+                      pull(metadata, RNAseq_ID), '/quant.sf')
+names(sample_files) = pull(metadata, Sample_ID)
+all(file.exists(sample_files))
+data.frame(thefiles = metadata, doihave = file.exists(sample_files))
+
+
+#################################
+## we now import transcript level counts usinf tximport
+txi <- tximport(sample_files,
+                type = "salmon",
+                txOut = T,
+                countsFromAbundance = "scaledTPM")
+cts <- txi$counts
+dim(cts) # 29,261 transcripts in 45 samples
+cts <- cts[rowSums(cts) > 0,]
+dim(cts) # 19,742 transcripts in 45 samples
+#View(cts)
+
+############################################
+## Transcript-to-gene mapping
+gff <- "/Users/school/Documents/Documents/UAB/UAB009/genome/AplCal3.0_GFF.gff"
+txdb.filename <- "/Users/school/Documents/Documents/UAB/UAB009/genome/AplCal3.0_GFF.sqlite"
+txdb <- makeTxDbFromGFF(gff)
+saveDb(txdb, txdb.filename)
+
+txdb <- loadDb(txdb.filename)
+txdf <- AnnotationDbi::select(txdb, keys(txdb, "GENEID"), 
+               "TXNAME", "GENEID")
+tab <- table(txdf$GENEID)
+txdf$ntx <- tab[match(txdf$GENEID, names(tab))]
+
+```
+
+## DRIMSeq
+```{r}
+cts[1:3,1:3]
+range(colSums(cts)/1e6)
+head(txdf)
+all(rownames(cts) %in% txdf$TXNAME) # this is FALSE
+dim(cts) # this has less transcripts (I already filtered) that is why it is FALSE above. 19,742 transcripts
+dim(txdf) # 29,250 transcripts
+txdf <- txdf[match(rownames(cts), txdf$TXNAME),]
+dim(txdf) # now there are 19,742 transcripts
+all(rownames(cts) == txdf$TXNAME) # this is still FALSE/NA
+# let's test what is making this FALSE
+which(!rownames(cts) %in% txdf$TXNAME)
+cts[1264,,drop=F]
+txdf[1264,]
+# OK I found them. I will make them into a vector and then eliminate them from the cts object and match the two dataframes again to see if that works
+getRid <- which(!rownames(cts) %in% txdf$TXNAME)
+#rownames_to_column(cts)
+typeof(cts)
+class(cts) # "matrix" "array"
+test <- cts[getRid,,drop=F]
+test <- rownames(test)
+test2 <- as.data.frame(cts)
+test2 <- rownames_to_column(test2)
+test3 <- test2[!(test2$rowname %in% test),]
+test3 <- as.data.frame(test3)
+rownames(test3) <- test3$rowname
+cts <- test3[,-1] 
+cts <- as.matrix(cts)
+typeof(cts)
+class(cts) # "matrix" "array"
+txdf <- txdf[match(rownames(cts), txdf$TXNAME),]
+dim(txdf) # now we are at 19,690
+all(rownames(cts) == txdf$TXNAME)
+
+
+#####
+## build a dataframe with geneID, transcript (feature) ID, and column for each sample
+counts <- data.frame(gene_id = txdf$GENEID,
+                     feature_id = txdf$TXNAME,
+                     cts)
+colnames(counts) <- sub("X","",colnames(counts))
+# View(counts)
+# typeof(counts)
+# class(counts)
+```
+
+```{r}
+# Now we will load in DRIMSeq and create a dmDSdata object with our counts and samples
+#BiocManager::install("DRIMSeq")
+library(DRIMSeq)
+metadata
+colnames(metadata)[1] <- "sample_id"
+metadata$sample_id <- as.character(metadata$sample_id)
+
+d <- dmDSdata(counts=counts, samples = metadata)
+d # 15,026 genes 45 samples
+#View(d)
+methods(class = class(d))
+counts(d[1,])[,1:4]
+
+```
+
+```{r}
+#We use all three of the possible filters: for a transcript to be retained in the dataset, we require that (1) it has a count of at least 10 in at least n.small samples, (2) it has a relative abundance proportion of at least 0.1 in at least n.small samples, and (3) the total count of the corresponding gene is at least 10 in all n samples.
+dim(counts)
+n <- 45 # total n of samples
+n.small <- 4 # sammest group size
+d <- dmFilter(d,
+              min_samps_feature_expr=n.small, min_feature_expr=1,
+              min_samps_feature_prop=n.small, min_feature_prop=0.01,
+              min_samps_gene_expr=n, min_gene_expr=1)
+# When filters are set to manusript specifications I get 113 genes back
+# so even when I reduce all filters to 1) 1, 2) 0.01, and 3) 1; I only get 296 genes back!
+# I am going to try with the low filter parameters above
+
+
+# test how many genes have N isoforms 
+table(table(counts(d)$gene_id))
+
+# Lets make a model design
+design_full <- model.matrix(~ 0 + group, data=DRIMSeq::samples(d))
+colnames(design_full)
+design_full %>% View()
+
+# next we are estimating the model parameters and testing for DTU
+# We made a full design with full interaction terms since the DESeq2 way by making a 'group' column did not work. The name of the colnames in the design_full object is the comparison. 
+# Ex. AgeA = Aged vs Mature. # This is because I set my levels above that I get the comparisons I wanted
+# Therefore it reasons that colname AgeA:LFIT:DietCR is testing genes that change in respect to age + in respect to training + in respect to diet.
+# This gets confusing when I then ask what does AgeA:LFIU:DietAL mean? does it mean genes that change in respect to age + in the opposite respect of learning + in the opposite respect of Diet? (I believe this is the case)
+# So I may need to add 2x interactions to get all differences (but that would not make senses either because I could say AgeA:LFIT to look at genes that change in respect to Age + in respect to training but then I believe i am saying irrespective of Diet. But that is not what i want, what if i want to see those comparisons in only one diet or the other!)
+### I'm not sure the above matters much since my design did not work as I recived the below message
+#Design matrix not of full rank. The following coefficients not estimable: AgeA:LFIT:DietAL AgeA:LFIU:DietCR AgeM:LFIT:DietCR AgeA:LFIT:DietCR
+# I am going back up to chnage my design and taking the full interactions out of it
+# So I just thought about it: You know what would work is to add a 'group' column to the metadata where I factor the 3 other veriables, set the control level to MUAL, and then + group into the model design or only ~ group into the design then it will be just like it was in DESeq2 and shoud give me enough columns in the results to make all my comparisons! Let's go do this now! (this will be done durring the Import Data step so all this wil just be for refernce)
+set.seed(1)
+system.time({
+  d <- dmPrecision(d, design=design_full)
+  d <- dmFit(d, design=design_full)
+  d <- dmTest(d, coef="Age")
+})
+
+### I am lost here, below is not working well. I will come back later
+# runTest <- d
+#   runTest <- dmPrecision(runTest, design=design_full)
+# plotPrecision(runTest)
+# head(mean_expression(runTest))
+# common_precision(runTest)
+# head(genewise_precision(runTest))
+# 
+#   runTest <- dmFit(runTest, design=design_full)
+# head(proportions(runTest))
+# head(coefficients(runTest))
+# head(coefficients(runTest), level = "feature")
+# 
+#   runTest <- dmTest(runTest, coef="AgeA")
+# plotPValues(runTest)
+# head(results(runTest))
+# res <- results(runTest)
+# res <- res[order(res$pvalue, decreasing = FALSE), ]
+# top_gene_id <- res$gene_id[1]
+# plotProportions(runTest, gene_id = top_gene_id, group_variable = "Diet")
+# 
+# 
+# res <- DRIMSeq::results(runTest)
+# head(res)
+# res.txp <- DRIMSeq::results(runTest, level="feature")
+# head(res.txp)
+# no.na <- function(x) ifelse(is.na(x), 1, x)
+# res$pvalue <- no.na(res$pvalue)
+# res.txp$pvalue <- no.na(res.txp$pvalue)
+# idx <- which(res$adj_pvalue < 0.05)[1]
+# res[idx,]
+# plotProportions(runTest, res$gene_id[idx], "Age")
+
+##################################################
+d <- dmPrecision(d, design=design_full)
+d <- dmFit(d, design=design_full)
+d <- dmTest(d, contrast=c(0,1,0,-1,0,0,0,0)) # LFI aged AL contrast
+
+library(edgeR)
+?glmLRT
+# we can either get a p-value per gene, which tests whether there is any differnetial transcript usage in that gene
+res <- DRIMSeq::results(d)
+head(res)
+# Or we can get a p-value per transcript, to test whether the proportions for that transcript chnages with the gene
+res.txp <- DRIMSeq::results(d, level="feature")
+head(res.txp)
+View(res.txp)
+
+# turn any "NA"s in the p-value column into 1's so not to mess up downstream functions
+no.na <- function(x) ifelse(is.na(x), 1, x)
+res$pvalue <- no.na(res$pvalue)
+res.txp$pvalue <- no.na(res.txp$pvalue)
+
+# now let's plot the estimated proportions for one of the sigificant genes, where we can see evidence of switching
+View(res)
+idx <- which(res$adj_pvalue < 0.05)[1] # there is only one gene that has a p.adj<0.05 = LOC101862197 = septin-11 [ Aplysia californica (California sea hare) ] > Filament-forming cytoskeletal GTPase. May play a role in cytokinesis (Potential). May play a role in the cytoarchitecture of neurons, including dendritic arborization and dendritic spines, and in GABAergic synaptic connectivity (By similarity). < from Uniprot septin-11 in humans 
+res[idx,]
+View(res)
+plotProportions(d, res$gene_id[idx], "Diet")
+View(d)
+typeof(d)
+class(d)
+plotProportions(d, gene_id=res$gene_id[idx], group_variable="LFI", plot_type="barplot") # I keep getting back stacked barplots when I want barplots with position=dodge so they are side by side like in the vingette but I cannot figure out how to get that so I am moving on for now
+## help with position=dodge to display my bars side by side
+View(plotProportions) # view the function
+p1 <- plotProportions(d, res$gene_id[idx], "LFI")
+as.data.frame(p1)
+
+# plot gene-level p-values
+plotPValues(d)
+
+# to get the log2 fold changes use the below code
+DRIMSeq::proportions(d)
+
+
+## If I use boxplots it will seperate the leves in the group factor in plotProportion()
+plotProportions(d, gene_id = "LOC101862197", group_variable = "Diet", plot_type = "boxplot1")
+
+## Let's try something ### everything commented out was my attempt. the bottom part works though!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+tttest <- subset(counts,counts$gene_id == "LOC101862197")
+tttest2 <- tttest[,c("gene_id","feature_id","839","841","847","849","871","863","865","874","877","878","881")]
+View(tttest2)
+# trnskripz <- c("XM_005103238.3","XM_035971040.1","XM_035971039.1")
+# menassss <- rowMeans(tttest2[,3:13])
+# ggplot(tttest2, aes(x=trnskripz, y=tttest2[,3:13])) +
+#   geom_bar(position = "dodge")
+# 
+# typeof(rownames(menassss))
+# typeof(menassss$.)
+# 
+# ggplot(menassss, aes(x=rownames(menassss), y=menassss$.))+
+#   geom_bar(stat = "identity")
+# menassss <- rownames_to_column(menassss$tx.name)
+# 
+# data2 <- data.frame(
+#   name2=c("XM_005103238.3","XM_035971040.1","XM_035971039.1"),
+#   value2=c(10.956912, 3.664378, 7.151763)
+# )
+# ggplot(data2, aes(x=name2, y=value2)) + 
+#   geom_bar(stat = "identity")
+# 
+# data <- data.frame(
+#   name=c("A","B","C","D","E") ,  
+#   value=c(3,12,5,18,45)
+#   )
+# ggplot(data, aes(x=name, y=value)) + 
+#   geom_bar(stat = "identity")
+
+
+
+tmet <- subset(metadata, group=="ATAL" | group=="AUAL")
+tmet <- tmet[,c(1,9)]
+tATAL <- subset(tmet, group=="ATAL")
+tATAL <- tATAL[,1]
+tAUAL <- subset(tmet, group=="AUAL")
+tAUAL <- tAUAL[,1]
+
+ttATAL <- rowMeans(tttest2[,tATAL])
+ttAUAL <- rowMeans(tttest2[,tAUAL])
+typeof(ttAUAL)
+class(ttAUAL)
+data3 <- data.frame(
+  name3=c("XM_005103238.3","XM_035971040.1","XM_035971039.1"),
+  ATAL=ttATAL,
+  AUAL=ttAUAL
+)
+data3_longer <- tidyr::pivot_longer(data3, -name3, names_to = "LFI", values_to = "mean_exp")
+ggplot(data3_longer, aes(x=name3, y=mean_exp, fill=LFI)) +
+  geom_col(position = position_dodge())
+ggplot(data3_longer, aes(x=name3, y=mean_exp, fill=LFI)) +
+  geom_boxplot(position = position_dodge()) # almost there!
+
+## below is it!!!
+data_longer <- tidyr::pivot_longer(tttest2[2:13], -feature_id)
+data_longer$LFI <- ifelse(data_longer$name=="863" | data_longer$name=="865" | data_longer$name=="874" | data_longer$name=="877" | data_longer$name=="878" | data_longer$name=="881", "AUAL","ATAL")
+ggplot(data_longer, aes(x=feature_id, y=value, fill=LFI)) +
+  geom_boxplot(position = position_dodge()) ## wow! that was a deal but I got it!!!!!!!!!!!
+```
+
+
+
+
+
+### stageR following DRIMseq
+```{r}
+dim(res)
+dim(res.txp)
+
+# below we are keeping only the first 15 characters of the transcript NCBI IDs
+pScreen <- res$pvalue
+strp <- function(x) substr(x,1,15)
+names(pScreen) <- strp(res$gene_id)
+# we make one coulmn matric of confirmation p-values
+pConfirmation <- matrix(res.txp$pvalue, ncol=1)
+rownames(pConfirmation) <- strp(res.txp$feature_id)
+# We arrange a 2 coumn data frame with transcript and gene_IDs
+tx2gene <- res.txp[,c("feature_id","gene_id")]
+for(i in 1:2) tx2gene[,i] <- strp(tx2gene[,i])
+# the following performns the 'stageR' analysis
+library(stageR)
+stageRObj <- stageRTx(pScreen=pScreen,
+                      pConfirmation=pConfirmation,
+                      pScreenAdjusted=F,
+                      tx2gene=tx2gene)
+stageRObj <- stageWiseAdjustment(stageRObj,
+                                 method="dtu",
+                                 alpha=0.05)
+suppressWarnings({
+  drim.padj <- getAdjustedPValues(stageRObj, 
+                                  order=F, onlySignificantGenes=T)
+})
+head(drim.padj) # LOC101862197 same septin-11 as above in DRIMSeq. the gene is significant but the transcripts are not
+
+# The final table above with adjusted p-values summarizes the information from the two-stage analysis. Only genes that passed the filter are included in the table, so the table already represents screened genes
+# The transcripts with values in the column, transcript, less than 0.05 pass the confirmation stage on a target 5% overall false discovery rate, or OFDR. This means that, in expectation, no more than 5% of the genes that pass screening will either (1) not contain any DTU, so be falsely screened genes, or (2) contain a falsely confirmed transcript.
+```
+### Post-hoc filtering on the standard deviation in proportions
+```{r}
+## SIDE NITE: I wonder if I split up my data to pairwise group comparisons If I can get at DTU in when only one variable is changed at a time. I may try that after I have finished here
+res.txp.filt <- DRIMSeq::results(d, level="feature")
+smallProportionSD <- function(d, filter=0.1) {
+  cts <- as.matrix(subset(counts(d), select=-c(gene_id, feature_id)))
+  gene.cts <- rowsum(cts, counts(d)$gene_id)
+  total.cts <- gene.cts[match(counts(d)$gene_id, rownames(gene.cts)),]
+  props <- cts/total.cts
+  propSD <- sqrt(rowVars(props))
+  propSD < filter
+}
+filt <- smallProportionSD(d)
+res.txp.filt$pvalue[filt] <- 1
+res.txp.filt$adj_pvalue[filt] <- 1
+View(res.txp.filt)
+## all the above stuff is not necessary unless we want to stop at DRIMseq but because we are going through DEXseq next the above is not necessary
+```
+
+## DEXSeq
+```{r}
+# We first load the DEXSeq package and then build a DEXSeqDataSet from the data contained in the dmDStest object
+# DEXSeqDataSet here uses the language “exon” but this should be read as “transcript” for our analysis
+# DEXSeq will test – after accounting for total gene expression for this sample and for the proportion of this transcript relative to the others – whether there is a condition-specific difference in the transcript proportion relative to the others
+library(DEXSeq)
+sample.data <- DRIMSeq::samples(d)
+sample.data$condition <- sample.data$group == "ATAL" | sample.data$group == "AUAL"
+count.data <- round(as.matrix(counts(d)[,-c(1:2)]))
+dxd <- DEXSeqDataSet(countData = count.data,
+                     sampleData = sample.data,
+                     design = ~sample + exon + condition:exon,
+                     featureID = counts(d)$feature_id,
+                     groupID = counts(d)$gene_id)
+
+# the following code runs DEXSeq
+dxd <- estimateSizeFactors(dxd)
+dxd <- estimateDispersions(dxd)
+dxd <- testForDEU(dxd, reducedModel = ~sample + exon)
+
+# extract results from above
+dxr <- DEXSeqResults(dxd, independentFiltering = F)
+qval <- perGeneQValue(dxr)
+dxr.g <- data.frame(gene=names(qval), qval)
+
+columns <- c("featureID", "groupID", "pvalue")
+dxr <- as.data.frame(dxr[,columns])
+head(dxr)
+View(dxr)
+dim(dxr)
+```
+
+### stageR following DEXSeq
+```{r}
+library(stageR)
+strp <- function(x) substr(x,1,15)
+pConfirmation <- matrix(dxr$pvalue, ncol=1)
+dimnames(pConfirmation) <- list(strp(dxr$featureID),"transcript")
+pScreen <- qval
+names(pScreen) <- strp(names(pScreen))
+tx2gene <- as.data.frame(dxr[,c("featureID","groupID")])
+for (i in 1:2) tx2gene[,i] <- strp(tx2gene[,i])
+
+# The following three functions provide a table with the OFDR control described above.
+stageRObj <- stageRTx(pScreen=pScreen,
+                      pConfirmation=pConfirmation,
+                      pScreenAdjusted=T,
+                      tx2gene=tx2gene)
+stageRObj <- stageWiseAdjustment(stageRObj,
+                                 method="dtu",
+                                 alpha=1)
+suppressWarnings({
+  dex.padj <- getAdjustedPValues(stageRObj,
+                                 order=F,
+                                 onlySignificantGenes=T)
+})
+head(dex.padj) # 
+
+```
+
+# ___________________________
+# LFI_aged_AL (ATAL_vs_AUAL)
+## Importing data
+```{r}
+#Decided to only use DRIMSeq to identify DTU and stop at the stageR step. 
+```
+
+```{r}
+## setting up our metadata table
+sample_table = read.csv("/Users/school/Projects/CR/samples.txt", header = T, stringsAsFactors = T)
+sample_table$P_SAV <- as.character(sample_table$P_SAV)
+sample_table$Age <- factor(sample_table$Age, levels = c("M","A") )
+sample_table$TRT <- factor(sample_table$TRT, levels = c("U", "T"))
+names(sample_table)[names(sample_table) == "TRT"] <- "LFI"
+row.names(sample_table)=sample_table$Sample_ID
+# below I create a 'group' column in the metadata
+sample_table$group <- factor(paste0(sample_table$Age, sample_table$LFI, sample_table$Diet))
+# checking the levels of 'group' column below
+levels(sample_table$group)
+sample_table$group <- relevel(sample_table$group, ref = "MUCR")
+
+# Sample 840 (Aged, Trained, CR ; ATCR) is technically a dud since its TTIM on day1 = 68 sec. This animal was retrained and dissected because we were short on aged CR animals. Still, I think it best to exclude this sample.
+# Samples 809 and 805 were determined to be outliers after performing a Robust PCA. Please see the code chunk above this one for more context. Both samples were (Mature, Untrained, CR ; MUCR)
+# I will delete this sample from the metadata file which will be used to import the sample data, so this sample will not be imported
+
+metadata <- sample_table[!(sample_table$Sample_ID %in% c("840","809","805")),]
+#############################
+## making our sample paths to quant files
+
+paste0('/Users/school/Projects/CR/quants/', 
+       pull(metadata, RNAseq_ID), '/quant.sf')
+sample_files = paste0('/Users/school/Projects/CR/quants/',
+                      pull(metadata, RNAseq_ID), '/quant.sf')
+names(sample_files) = pull(metadata, Sample_ID)
+all(file.exists(sample_files))
+data.frame(thefiles = metadata, doihave = file.exists(sample_files))
+
+
+#################################
+## we now import transcript level counts usinf tximport
+txi <- tximport(sample_files,
+                type = "salmon",
+                txOut = T,
+                countsFromAbundance = "scaledTPM")
+cts_LFIagedAL <- txi$counts
+dim(cts_LFIagedAL) # 29,261 transcripts in 45 samples
+cts_LFIagedAL <- cts_LFIagedAL[rowSums(cts_LFIagedAL) > 0,]
+dim(cts_LFIagedAL) # 19,742 transcripts in 45 samples
+#View(cts)
+
+############################################
+## Transcript-to-gene mapping
+gff <- "/Users/school/Documents/Documents/UAB/UAB009/genome/AplCal3.0_GFF.gff"
+txdb.filename <- "/Users/school/Documents/Documents/UAB/UAB009/genome/AplCal3.0_GFF.sqlite"
+txdb <- makeTxDbFromGFF(gff)
+saveDb(txdb, txdb.filename)
+
+txdb <- loadDb(txdb.filename)
+txdf <- AnnotationDbi::select(txdb, keys(txdb, "GENEID"), 
+               "TXNAME", "GENEID")
+tab <- table(txdf$GENEID)
+txdf$ntx <- tab[match(txdf$GENEID, names(tab))]
+
+```
+
+## DRIMSeq
+```{r}
+cts[1:3,1:3]
+range(colSums(cts)/1e6)
+head(txdf)
+all(rownames(cts) %in% txdf$TXNAME) # this is FALSE
+dim(cts) # this has less transcripts (I already filtered) that is why it is FALSE above. 19,742 transcripts
+dim(txdf) # 29,250 transcripts
+txdf <- txdf[match(rownames(cts), txdf$TXNAME),]
+dim(txdf) # now there are 19,742 transcripts
+all(rownames(cts) == txdf$TXNAME) # this is still FALSE/NA
+# let's test what is making this FALSE
+which(!rownames(cts) %in% txdf$TXNAME)
+cts[1264,,drop=F]
+txdf[1264,]
+# OK I found them. I will make them into a vector and then eliminate them from the cts object and match the two dataframes again to see if that works
+getRid <- which(!rownames(cts) %in% txdf$TXNAME)
+#rownames_to_column(cts)
+typeof(cts)# "double"
+class(cts) # "matrix" "array"
+test <- cts[getRid,,drop=F]
+test <- rownames(test)
+test2 <- as.data.frame(cts)
+test2 <- rownames_to_column(test2)
+test3 <- test2[!(test2$rowname %in% test),]
+test3 <- as.data.frame(test3)
+rownames(test3) <- test3$rowname
+cts <- test3[,-1] 
+cts <- as.matrix(cts)
+typeof(cts) # "double"
+class(cts) # "matrix" "array"
+txdf <- txdf[match(rownames(cts), txdf$TXNAME),]
+dim(txdf) # now we are at 19,690
+all(rownames(cts) == txdf$TXNAME)
+
+
+#####
+## build a dataframe with geneID, transcript (feature) ID, and column for each sample
+counts <- data.frame(gene_id = txdf$GENEID,
+                     feature_id = txdf$TXNAME,
+                     cts)
+colnames(counts) <- sub("X","",colnames(counts))
+```
+
+```{r}
+# Now we will load in DRIMSeq and create a dmDSdata object with our counts and samples
+#BiocManager::install("DRIMSeq")
+library(DRIMSeq)
+metadata
+colnames(metadata)[1] <- "sample_id"
+metadata$sample_id <- as.character(metadata$sample_id)
+
+d <- dmDSdata(counts=counts, samples = metadata)
+d # 15,026 genes 45 samples
+#View(d)
+methods(class = class(d))
+counts(d[1,])[,1:4]
+
+```
+
+```{r}
+#We use all three of the possible filters: for a transcript to be retained in the dataset, we require that (1) it has a count of at least 10 in at least n.small samples, (2) it has a relative abundance proportion of at least 0.1 in at least n.small samples, and (3) the total count of the corresponding gene is at least 10 in all n samples.
+dim(counts)
+n <- 45 # total n of samples
+n.small <- 4 # smallest group size
+d <- dmFilter(d,
+              min_samps_feature_expr=n.small, min_feature_expr=1,
+              min_samps_feature_prop=n.small, min_feature_prop=0.01,
+              min_samps_gene_expr=n, min_gene_expr=1)
+# I only get 296 genes back!
+
+# test how many genes have N isoforms 
+table(table(counts(d)$gene_id))
+
+# Lets make a model design
+design_full <- model.matrix(~ 0 + group, data=DRIMSeq::samples(d))
+colnames(design_full)
+design_full %>% View()
+
+set.seed(1)
+
+d_LFIagedAL <- dmPrecision(d, design=design_full)
+d_LFIagedAL <- dmFit(d_LFIagedAL, design=design_full)
+d_LFIagedAL <- dmTest(d_LFIagedAL, contrast=c(0,1,0,-1,0,0,0,0)) # LFI aged AL contrast
+
+# we can either get a p-value per gene, which tests whether there is any differnetial transcript usage in that gene
+res_LFIagedAL <- DRIMSeq::results(d_LFIagedAL)
+head(res_LFIagedAL)
+View(res_LFIagedAL)
+# Or we can get a p-value per transcript, to test whether the proportions for that transcript chnages with the gene
+res.txp_LFIagedAL <- DRIMSeq::results(d_LFIagedAL, level="feature")
+head(res.txp_LFIagedAL)
+View(res.txp_LFIagedAL)
+
+# turn any "NA"s in the p-value column into 1's so not to mess up downstream functions
+no.na <- function(x) ifelse(is.na(x), 1, x)
+res_LFIagedAL$pvalue <- no.na(res_LFIagedAL$pvalue)
+res.txp_LFIagedAL$pvalue <- no.na(res.txp_LFIagedAL$pvalue)
+
+# now let's plot the estimated proportions for one of the sigificant genes, where we can see evidence of switching
+idx_LFIagedCR <- which(res_LFIagedCR$adj_pvalue < 0.05)[1] # there is only one gene that has a p.adj<0.05 = LOC101862197 = septin-11 [ Aplysia californica (California sea hare) ] > Filament-forming cytoskeletal GTPase. May play a role in cytokinesis (Potential). May play a role in the cytoarchitecture of neurons, including dendritic arborization and dendritic spines, and in GABAergic synaptic connectivity (By similarity). < from Uniprot septin-11 in humans 
+res[idx,]
+
+
+plotProportions(d, gene_id=res$gene_id[idx], group_variable="LFI", plot_type="barplot") # I keep getting back stacked barplots when I want barplots with position=dodge so they are side by side like in the vingette but I cannot figure out how to get that so I am moving on for now
+
+# plot gene-level p-values
+plotPValues(d_LFIagedAL)
+
+# to get the log2 fold changes use the below code
+DRIMSeq::proportions(d_LFIagedAL)
+
+
+## If I use boxplots it will seperate the leves in the group factor in plotProportion()
+plotProportions(d_LFIagedAL, gene_id = "LOC101862197", group_variable = "LFI", plot_type = "boxplot1")
+
+## Let's try something ### everything commented out was my attempt. the bottom part works though!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+tttest <- subset(counts,counts$gene_id == "LOC101862197")
+tttest2 <- tttest[,c("gene_id","feature_id","852","855","857","858","860","866","872","873","875","876","879","880")]
+View(tttest2)
+
+## below is it!!!
+data_longer <- tidyr::pivot_longer(tttest2[2:14], -feature_id)
+data_longer$LFI <- ifelse(data_longer$name=="872" | data_longer$name=="873" | data_longer$name=="875" | data_longer$name=="876" | data_longer$name=="879" | data_longer$name=="880", "TT2UCR","TT2TCR")
+ggplot(data_longer, aes(x=feature_id, y=value, fill=LFI)) +
+  geom_boxplot(position = position_dodge()) +
+  ggtitle("LOC101862197 – septin-11")## wow! that was a deal but I got it!!!!!!!!!!!
+```
+
+### stageR following DRIMseq
+```{r}
+dim(res)
+dim(res.txp)
+
+# below we are keeping only the first 15 characters of the transcript NCBI IDs
+pScreen <- res$pvalue
+strp <- function(x) substr(x,1,15)
+names(pScreen) <- strp(res$gene_id)
+# we make one coulmn matric of confirmation p-values
+pConfirmation <- matrix(res.txp$pvalue, ncol=1)
+rownames(pConfirmation) <- strp(res.txp$feature_id)
+# We arrange a 2 coumn data frame with transcript and gene_IDs
+tx2gene <- res.txp[,c("feature_id","gene_id")]
+for(i in 1:2) tx2gene[,i] <- strp(tx2gene[,i])
+# the following performns the 'stageR' analysis
+library(stageR)
+stageRObj <- stageRTx(pScreen=pScreen,
+                      pConfirmation=pConfirmation,
+                      pScreenAdjusted=F,
+                      tx2gene=tx2gene)
+stageRObj <- stageWiseAdjustment(stageRObj,
+                                 method="dtu",
+                                 alpha=0.05)
+suppressWarnings({
+  drim.padj <- getAdjustedPValues(stageRObj, 
+                                  order=F, onlySignificantGenes=T)
+})
+head(drim.padj) # LOC101862197 same septin-11 as above in DRIMSeq. the gene is significant but the transcripts are not
+View(drim.padj)
+# The final table above with adjusted p-values summarizes the information from the two-stage analysis. Only genes that passed the filter are included in the table, so the table already represents screened genes
+# The transcripts with values in the column, transcript, less than 0.05 pass the confirmation stage on a target 5% overall false discovery rate, or OFDR. This means that, in expectation, no more than 5% of the genes that pass screening will either (1) not contain any DTU, so be falsely screened genes, or (2) contain a falsely confirmed transcript.
+```
+
+
+# ___________________________
+# Age_AL (AUAL_vs_MUAL)
+## DRIMSeq
+```{r}
+d
+set.seed(1)
+
+d_AgeAL <- dmPrecision(d, design=design_full)
+d_AgeAL <- dmFit(d_AgeAL, design=design_full)
+d_AgeAL <- dmTest(d_AgeAL, contrast=c(0,0,0,1,0,0,0,-1)) # Age AL contrast
+
+# we can either get a p-value per gene, which tests whether there is any differential transcript usage in that gene
+res_AgeAL <- DRIMSeq::results(d_AgeAL)
+head(res_AgeAL)
+View(res_AgeAL)
+# Or we can get a p-value per transcript, to test whether the proportions for that transcript chnages with the gene
+res.txp_AgeAL <- DRIMSeq::results(d_AgeAL, level="feature")
+head(res.txp_AgeAL)
+View(res.txp_AgeAL)
+
+# turn any "NA"s in the p-value column into 1's so not to mess up downstream functions
+no.na <- function(x) ifelse(is.na(x), 1, x)
+res_AgeAL$pvalue <- no.na(res_AgeAL$pvalue)
+res.txp_AgeAL$pvalue <- no.na(res.txp_AgeAL$pvalue)
+
+# now let's plot the estimated proportions for one of the sigificant genes, where we can see evidence of switching
+idx_AgeAL <- which(res_AgeAL$adj_pvalue < 0.05) #
+res_AgeAL[idx_AgeAL,]
+# to check which are significant (below to get the first one)
+idx_AgeAL <- which(res_AgeAL$adj_pvalue < 0.05)[1] #
+res_AgeAL[idx_AgeAL,]
+
+plotProportions(d_AgeAL, gene_id=res_AgeAL$gene_id[idx_AgeAL], group_variable="LFI", plot_type="barplot") # I keep getting back stacked barplots when I want barplots with position=dodge so they are side by side like in the vingette but I cannot figure out how to get that so I am moving on for now
+
+
+# plot gene-level p-values
+plotPValues(d_AgeAL)
+
+# to get the log2 fold changes use the below code
+DRIMSeq::proportions(d_AgeAL)
+
+
+## If I use boxplots it will seperate the leves in the group factor in plotProportion()
+plotProportions(d_AgeAL, gene_id = "LOC101850213", group_variable = "LFI", plot_type = "boxplot1")
+
+## Let's try something ### everything commented out was my attempt. the bottom part works though!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+tttest <- subset(counts,counts$gene_id == "LOC101845050")
+tttest2 <- tttest[,c("gene_id","feature_id","863","865","874","877","878","881","810","816","828","830","836","837")]
+View(tttest2)
+
+
+## below is it!!!
+data_longer <- tidyr::pivot_longer(tttest2[2:14], -feature_id)
+data_longer$Age <- ifelse(data_longer$name=="810" | data_longer$name=="816" | data_longer$name=="828" | data_longer$name=="830" | data_longer$name=="836" | data_longer$name=="837", "TT1UAL","TT2UAL")
+ggplot(data_longer, aes(x=feature_id, y=value, fill=Age)) +
+  geom_boxplot(position = position_dodge()) +
+  ggtitle("LOC101845050 - tropomyosin-2") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=0))## wow! that was a deal but I got it!!!!!!!!!!!
+```
+
+### stageR following DRIMseq
+```{r}
+dim(res_AgeAL)
+dim(res.txp_AgeAL)
+
+# below we are keeping only the first 15 characters of the transcript NCBI IDs
+pScreen_AgeAL <- res_AgeAL$pvalue
+strp <- function(x) substr(x,1,15)
+names(pScreen_AgeAL) <- strp(res_AgeAL$gene_id)
+# we make one coulmn matric of confirmation p-values
+pConfirmation_AgeAL <- matrix(res.txp_AgeAL$pvalue, ncol=1)
+rownames(pConfirmation_AgeAL) <- strp(res.txp_AgeAL$feature_id)
+# We arrange a 2 coumn data frame with transcript and gene_IDs
+tx2gene_AgeAL <- res.txp_AgeAL[,c("feature_id","gene_id")]
+for(i in 1:2) tx2gene_AgeAL[,i] <- strp(tx2gene_AgeAL[,i])
+# the following performns the 'stageR' analysis
+library(stageR)
+stageRObj_AgeAL <- stageRTx(pScreen=pScreen_AgeAL,
+                      pConfirmation=pConfirmation_AgeAL,
+                      pScreenAdjusted=F,
+                      tx2gene=tx2gene)
+stageRObj_AgeAL <- stageWiseAdjustment(stageRObj_AgeAL,
+                                 method="dtu",
+                                 alpha=0.1)
+suppressWarnings({
+  drim.padj_AgeAL <- getAdjustedPValues(stageRObj_AgeAL, 
+                                  order=F, onlySignificantGenes=T)
+})
+head(drim.padj_AgeAL)
+View(drim.padj_AgeAL)# LOC101862197 same septin-11 as above in DRIMSeq. the gene is significant but the transcripts are not
+
+# The final table above with adjusted p-values summarizes the information from the two-stage analysis. Only genes that passed the filter are included in the table, so the table already represents screened genes
+# The transcripts with values in the column, transcript, less than 0.05 pass the confirmation stage on a target 5% overall false discovery rate, or OFDR. This means that, in expectation, no more than 5% of the genes that pass screening will either (1) not contain any DTU, so be falsely screened genes, or (2) contain a falsely confirmed transcript.
+```
+
+# ___________________________
+# LFI_young_AL (MTAL_vs_MUAL)
+## DRIMSeq
+```{r}
+d
+set.seed(1)
+
+d_LFIyoungAL <- dmPrecision(d, design=design_full)
+d_LFIyoungAL <- dmFit(d_LFIyoungAL, design=design_full)
+d_LFIyoungAL <- dmTest(d_LFIyoungAL, contrast=c(0,0,0,0,0,1,0,-1)) # Age AL contrast
+
+# we can either get a p-value per gene, which tests whether there is any differnetial transcript usage in that gene
+res_LFIyoungAL <- DRIMSeq::results(d_LFIyoungAL)
+head(res_LFIyoungAL)
+View(res_LFIyoungAL)
+# Or we can get a p-value per transcript, to test whether the proportions for that transcript chnages with the gene
+res.txp_LFIyoungAL <- DRIMSeq::results(d_LFIyoungAL, level="feature")
+head(res.txp_LFIyoungAL)
+View(res.txp_LFIyoungAL)
+
+# turn any "NA"s in the p-value column into 1's so not to mess up downstream functions
+no.na <- function(x) ifelse(is.na(x), 1, x)
+res_LFIyoungAL$pvalue <- no.na(res_LFIyoungAL$pvalue)
+res.txp_LFIyoungAL$pvalue <- no.na(res.txp_LFIyoungAL$pvalue)
+
+# now let's plot the estimated proportions for one of the sigificant genes, where we can see evidence of switching
+idx_LFIyoungAL <- which(res_LFIyoungAL$adj_pvalue < 0.05)[1] # there is only one gene that has a p.adj<0.05 = LOC101862197 = septin-11 [ Aplysia californica (California sea hare) ] > Filament-forming cytoskeletal GTPase. May play a role in cytokinesis (Potential). May play a role in the cytoarchitecture of neurons, including dendritic arborization and dendritic spines, and in GABAergic synaptic connectivity (By similarity). < from Uniprot septin-11 in humans 
+res[idx,]
+
+
+plotProportions(d, gene_id=res$gene_id[idx], group_variable="LFI", plot_type="barplot") # I keep getting back stacked barplots when I want barplots with position=dodge so they are side by side like in the vingette but I cannot figure out how to get that so I am moving on for now
+
+
+# plot gene-level p-values
+plotPValues(d)
+
+# to get the log2 fold changes use the below code
+DRIMSeq::proportions(d)
+
+
+## If I use boxplots it will seperate the leves in the group factor in plotProportion()
+plotProportions(d, gene_id = "LOC101862197", group_variable = "LFI", plot_type = "boxplot1")
+
+## Let's try something ### everything commented out was my attempt. the bottom part works though!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+tttest <- subset(counts,counts$gene_id == "LOC101862197")
+tttest2 <- tttest[,c("gene_id","feature_id","839","841","847","849","871","863","865","874","877","878","881")]
+View(tttest2)
+
+## below is it!!!
+data_longer <- tidyr::pivot_longer(tttest2[2:13], -feature_id)
+data_longer$LFI <- ifelse(data_longer$name=="863" | data_longer$name=="865" | data_longer$name=="874" | data_longer$name=="877" | data_longer$name=="878" | data_longer$name=="881", "AUAL","ATAL")
+ggplot(data_longer, aes(x=feature_id, y=value, fill=LFI)) +
+  geom_boxplot(position = position_dodge()) ## wow! that was a deal but I got it!!!!!!!!!!!
+```
+
+
+### stageR following DRIMseq
+```{r}
+dim(res_LFIyoungAL)
+dim(res.txp_LFIyoungAL)
+
+# below we are keeping only the first 15 characters of the transcript NCBI IDs
+pScreen_LFIyoungAL <- res_LFIyoungAL$pvalue
+strp <- function(x) substr(x,1,15)
+names(pScreen_LFIyoungAL) <- strp(res_LFIyoungAL$gene_id)
+# we make one coulmn matric of confirmation p-values
+pConfirmation_LFIyoungAL <- matrix(res.txp_LFIyoungAL$pvalue, ncol=1)
+rownames(pConfirmation_LFIyoungAL) <- strp(res.txp_LFIyoungAL$feature_id)
+# We arrange a 2 coumn data frame with transcript and gene_IDs
+tx2gene_LFIyoungAL <- res.txp_LFIyoungAL[,c("feature_id","gene_id")]
+for(i in 1:2) tx2gene_LFIyoungAL[,i] <- strp(tx2gene_LFIyoungAL[,i])
+# the following performns the 'stageR' analysis
+library(stageR)
+stageRObj_LFIyoungAL <- stageRTx(pScreen=pScreen_LFIyoungAL,
+                      pConfirmation=pConfirmation_LFIyoungAL,
+                      pScreenAdjusted=F,
+                      tx2gene=tx2gene)
+stageRObj_LFIyoungAL <- stageWiseAdjustment(stageRObj_LFIyoungAL,
+                                 method="dtu",
+                                 alpha=0.05)
+suppressWarnings({
+  drim.padj_LFIyoungAL <- getAdjustedPValues(stageRObj_LFIyoungAL, 
+                                  order=F, onlySignificantGenes=T)
+})
+head(drim.padj_LFIyoungAL) # LOC101862197 same septin-11 as above in DRIMSeq. the gene is significant but the transcripts are not
+
+# The final table above with adjusted p-values summarizes the information from the two-stage analysis. Only genes that passed the filter are included in the table, so the table already represents screened genes
+# The transcripts with values in the column, transcript, less than 0.05 pass the confirmation stage on a target 5% overall false discovery rate, or OFDR. This means that, in expectation, no more than 5% of the genes that pass screening will either (1) not contain any DTU, so be falsely screened genes, or (2) contain a falsely confirmed transcript.
+```
+
+
+
+# ___________________________
+# Age_CR (AUCR_vs_MUCR)
+## DRIMSeq
+```{r}
+d
+set.seed(1)
+
+d_AgeCR <- dmPrecision(d, design=design_full)
+d_AgeCR <- dmFit(d_AgeCR, design=design_full)
+d_AgeCR <- dmTest(d_AgeCR, contrast=c(-1,0,0,0,1,0,0,0)) # Age CR contrast
+
+# we can either get a p-value per gene, which tests whether there is any differnetial transcript usage in that gene
+res_AgeCR <- DRIMSeq::results(d_AgeCR)
+head(res_AgeCR)
+View(res_AgeCR)
+# Or we can get a p-value per transcript, to test whether the proportions for that transcript chnages with the gene
+res.txp_AgeCR <- DRIMSeq::results(d_AgeCR, level="feature")
+head(res.txp_AgeCR)
+View(res.txp_AgeCR)
+
+# turn any "NA"s in the p-value column into 1's so not to mess up downstream functions
+no.na <- function(x) ifelse(is.na(x), 1, x)
+res_AgeCR$pvalue <- no.na(res_AgeCR$pvalue)
+res.txp_AgeCR$pvalue <- no.na(res.txp_AgeCR$pvalue)
+
+# now let's plot the estimated proportions for one of the sigificant genes, where we can see evidence of switching
+idx_AgeCR <- which(res_AgeCR$adj_pvalue < 0.05) # 
+res[idx,]
+
+
+plotProportions(d, gene_id=res$gene_id[idx], group_variable="LFI", plot_type="barplot") # I keep getting back stacked barplots when I want barplots with position=dodge so they are side by side like in the vingette but I cannot figure out how to get that so I am moving on for now
+
+
+# plot gene-level p-values
+plotPValues(d)
+
+# to get the log2 fold changes use the below code
+DRIMSeq::proportions(d)
+
+
+## If I use boxplots it will seperate the leves in the group factor in plotProportion()
+plotProportions(d, gene_id = "LOC101862197", group_variable = "LFI", plot_type = "boxplot1")
+
+## Let's try something ### everything commented out was my attempt. the bottom part works though!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+tttest <- subset(counts,counts$gene_id == "LOC101845050")
+tttest2 <- tttest[,c("gene_id","feature_id","815","823","824","829","872","873","875","876","879","880")]
+View(tttest2)
+
+
+## below is it!!!
+data_longer <- tidyr::pivot_longer(tttest2[2:12], -feature_id)
+data_longer$Age <- ifelse(data_longer$name=="872" | data_longer$name=="873" | data_longer$name=="875" | data_longer$name=="876" | data_longer$name=="879" | data_longer$name=="880", "TT2UCR","TT1UCR")
+ggplot(data_longer, aes(x=feature_id, y=value, fill=Age)) +
+  geom_boxplot(position = position_dodge()) +
+  ggtitle("LOC101845050 - tropomyosin-2") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=0))## wow! that was a deal but I got it!!!!!!!!!!!
+```
+
+
+### stageR following DRIMseq
+```{r}
+dim(res_AgeCR)
+dim(res.txp_AgeCR)
+
+# below we are keeping only the first 15 characters of the transcript NCBI IDs
+pScreen_AgeCR <- res_AgeCR$pvalue
+strp <- function(x) substr(x,1,15)
+names(pScreen_AgeCR) <- strp(res_AgeCR$gene_id)
+# we make one coulmn matric of confirmation p-values
+pConfirmation_AgeCR <- matrix(res.txp_AgeCR$pvalue, ncol=1)
+rownames(pConfirmation_AgeCR) <- strp(res.txp_AgeCR$feature_id)
+# We arrange a 2 coumn data frame with transcript and gene_IDs
+tx2gene_AgeCR <- res.txp_AgeCR[,c("feature_id","gene_id")]
+for(i in 1:2) tx2gene_AgeCR[,i] <- strp(tx2gene_AgeCR[,i])
+# the following performns the 'stageR' analysis
+library(stageR)
+stageRObj_AgeCR <- stageRTx(pScreen=pScreen_AgeCR,
+                      pConfirmation=pConfirmation_AgeCR,
+                      pScreenAdjusted=F,
+                      tx2gene=tx2gene)
+stageRObj_AgeCR <- stageWiseAdjustment(stageRObj_AgeCR,
+                                 method="dtu",
+                                 alpha=0.05)
+suppressWarnings({
+  drim.padj_AgeCR <- getAdjustedPValues(stageRObj_AgeCR, 
+                                  order=F, onlySignificantGenes=T)
+})
+head(drim.padj_AgeCR) # LOC101862197 same septin-11 as above in DRIMSeq. the gene is significant but the transcripts are not
+
+# The final table above with adjusted p-values summarizes the information from the two-stage analysis. Only genes that passed the filter are included in the table, so the table already represents screened genes
+# The transcripts with values in the column, transcript, less than 0.05 pass the confirmation stage on a target 5% overall false discovery rate, or OFDR. This means that, in expectation, no more than 5% of the genes that pass screening will either (1) not contain any DTU, so be falsely screened genes, or (2) contain a falsely confirmed transcript.
+```
+
+
+
+
+
+# ___________________________
+# LFI_young_CR (MTCR_vs_MUCR)
+## DRIMSeq
+```{r}
+d
+set.seed(1)
+
+d_LFIyoungCR <- dmPrecision(d, design=design_full)
+d_LFIyoungCR <- dmFit(d_LFIyoungCR, design=design_full)
+d_LFIyoungCR <- dmTest(d_LFIyoungCR, contrast=c(-1,0,0,0,0,0,1,0)) # LFI young CR contrast
+
+# we can either get a p-value per gene, which tests whether there is any differnetial transcript usage in that gene
+res_LFIyoungCR <- DRIMSeq::results(d_LFIyoungCR)
+head(res_LFIyoungCR)
+View(res_LFIyoungCR)
+# Or we can get a p-value per transcript, to test whether the proportions for that transcript chnages with the gene
+res.txp_LFIyoungCR <- DRIMSeq::results(d_LFIyoungCR, level="feature")
+head(res.txp_LFIyoungCR)
+View(res.txp_LFIyoungCR)
+
+# turn any "NA"s in the p-value column into 1's so not to mess up downstream functions
+no.na <- function(x) ifelse(is.na(x), 1, x)
+res_LFIyoungCR$pvalue <- no.na(res_LFIyoungCR$pvalue)
+res.txp_LFIyoungCR$pvalue <- no.na(res.txp_LFIyoungCR$pvalue)
+
+# now let's plot the estimated proportions for one of the sigificant genes, where we can see evidence of switching
+idx_LFIyoungCR <- which(res_LFIyoungCR$adj_pvalue < 0.05)[1] # there is only one gene that has a p.adj<0.05 = LOC101862197 = septin-11 [ Aplysia californica (California sea hare) ] > Filament-forming cytoskeletal GTPase. May play a role in cytokinesis (Potential). May play a role in the cytoarchitecture of neurons, including dendritic arborization and dendritic spines, and in GABAergic synaptic connectivity (By similarity). < from Uniprot septin-11 in humans 
+res[idx,]
+
+
+plotProportions(d, gene_id=res$gene_id[idx], group_variable="LFI", plot_type="barplot") # I keep getting back stacked barplots when I want barplots with position=dodge so they are side by side like in the vingette but I cannot figure out how to get that so I am moving on for now
+
+
+# plot gene-level p-values
+plotPValues(d)
+
+# to get the log2 fold changes use the below code
+DRIMSeq::proportions(d)
+
+
+## If I use boxplots it will seperate the leves in the group factor in plotProportion()
+plotProportions(d, gene_id = "LOC101862197", group_variable = "LFI", plot_type = "boxplot1")
+
+## Let's try something ### everything commented out was my attempt. the bottom part works though!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+tttest <- subset(counts,counts$gene_id == "LOC101862197")
+tttest2 <- tttest[,c("gene_id","feature_id","839","841","847","849","871","863","865","874","877","878","881")]
+View(tttest2)
+
+## below is it!!!
+data_longer <- tidyr::pivot_longer(tttest2[2:13], -feature_id)
+data_longer$LFI <- ifelse(data_longer$name=="863" | data_longer$name=="865" | data_longer$name=="874" | data_longer$name=="877" | data_longer$name=="878" | data_longer$name=="881", "AUAL","ATAL")
+ggplot(data_longer, aes(x=feature_id, y=value, fill=LFI)) +
+  geom_boxplot(position = position_dodge()) ## wow! that was a deal but I got it!!!!!!!!!!!
+```
+
+
+### stageR following DRIMseq
+```{r}
+dim(res_LFIyoungCR)
+dim(res.txp_LFIyoungCR)
+
+# below we are keeping only the first 15 characters of the transcript NCBI IDs
+pScreen_LFIyoungCR <- res_LFIyoungCR$pvalue
+strp <- function(x) substr(x,1,15)
+names(pScreen_LFIyoungCR) <- strp(res_LFIyoungCR$gene_id)
+# we make one coulmn matric of confirmation p-values
+pConfirmation_LFIyoungCR <- matrix(res.txp_LFIyoungCR$pvalue, ncol=1)
+rownames(pConfirmation_LFIyoungCR) <- strp(res.txp_LFIyoungCR$feature_id)
+# We arrange a 2 coumn data frame with transcript and gene_IDs
+tx2gene_LFIyoungCR <- res.txp_LFIyoungCR[,c("feature_id","gene_id")]
+for(i in 1:2) tx2gene_LFIyoungCR[,i] <- strp(tx2gene_LFIyoungCR[,i])
+# the following performns the 'stageR' analysis
+library(stageR)
+stageRObj_LFIyoungCR <- stageRTx(pScreen=pScreen_LFIyoungCR,
+                      pConfirmation=pConfirmation_LFIyoungCR,
+                      pScreenAdjusted=F,
+                      tx2gene=tx2gene)
+stageRObj_LFIyoungCR <- stageWiseAdjustment(stageRObj_LFIyoungCR,
+                                 method="dtu",
+                                 alpha=0.05)
+suppressWarnings({
+  drim.padj_LFIyoungCR <- getAdjustedPValues(stageRObj_LFIyoungCR, 
+                                  order=F, onlySignificantGenes=T)
+})
+head(drim.padj_LFIyoungCR) # LOC101862197 same septin-11 as above in DRIMSeq. the gene is significant but the transcripts are not
+
+# The final table above with adjusted p-values summarizes the information from the two-stage analysis. Only genes that passed the filter are included in the table, so the table already represents screened genes
+# The transcripts with values in the column, transcript, less than 0.05 pass the confirmation stage on a target 5% overall false discovery rate, or OFDR. This means that, in expectation, no more than 5% of the genes that pass screening will either (1) not contain any DTU, so be falsely screened genes, or (2) contain a falsely confirmed transcript.
+```
+
+
+
+
+# ___________________________
+# LFI_aged_CR (ATCR_vs_AUCR)
+## DRIMSeq
+```{r}
+d
+set.seed(1)
+
+d_LFIagedCR <- dmPrecision(d, design=design_full)
+d_LFIagedCR <- dmFit(d_LFIagedCR, design=design_full)
+d_LFIagedCR <- dmTest(d_LFIagedCR, contrast=c(0,0,1,0,-1,0,0,0)) # LFI young CR contrast
+
+# we can either get a p-value per gene, which tests whether there is any differnetial transcript usage in that gene
+res_LFIagedCR <- DRIMSeq::results(d_LFIagedCR)
+head(res_LFIagedCR)
+View(res_LFIagedCR)
+# Or we can get a p-value per transcript, to test whether the proportions for that transcript chnages with the gene
+res.txp_LFIagedCR <- DRIMSeq::results(d_LFIagedCR, level="feature")
+head(res.txp_LFIagedCR)
+View(res.txp_LFIagedCR)
+
+# turn any "NA"s in the p-value column into 1's so not to mess up downstream functions
+no.na <- function(x) ifelse(is.na(x), 1, x)
+res_LFIagedCR$pvalue <- no.na(res_LFIagedCR$pvalue)
+res.txp_LFIagedCR$pvalue <- no.na(res.txp_LFIagedCR$pvalue)
+
+# now let's plot the estimated proportions for one of the sigificant genes, where we can see evidence of switching
+idx_LFIagedCR <- which(res_LFIagedCR$adj_pvalue < 0.05)[1] # there is only one gene that has a p.adj<0.05 = LOC101862197 = septin-11 [ Aplysia californica (California sea hare) ] > Filament-forming cytoskeletal GTPase. May play a role in cytokinesis (Potential). May play a role in the cytoarchitecture of neurons, including dendritic arborization and dendritic spines, and in GABAergic synaptic connectivity (By similarity). < from Uniprot septin-11 in humans 
+res[idx,]
+
+
+plotProportions(d, gene_id=res$gene_id[idx], group_variable="LFI", plot_type="barplot") # I keep getting back stacked barplots when I want barplots with position=dodge so they are side by side like in the vingette but I cannot figure out how to get that so I am moving on for now
+
+
+# plot gene-level p-values
+plotPValues(d)
+
+# to get the log2 fold changes use the below code
+DRIMSeq::proportions(d)
+
+
+## If I use boxplots it will seperate the leves in the group factor in plotProportion()
+plotProportions(d, gene_id = "LOC101862197", group_variable = "LFI", plot_type = "boxplot1")
+
+## Let's try something ### everything commented out was my attempt. the bottom part works though!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+tttest <- subset(counts,counts$gene_id == "LOC101862197")
+tttest2 <- tttest[,c("gene_id","feature_id","839","841","847","849","871","863","865","874","877","878","881")]
+View(tttest2)
+
+## below is it!!!
+data_longer <- tidyr::pivot_longer(tttest2[2:13], -feature_id)
+data_longer$LFI <- ifelse(data_longer$name=="863" | data_longer$name=="865" | data_longer$name=="874" | data_longer$name=="877" | data_longer$name=="878" | data_longer$name=="881", "AUAL","ATAL")
+ggplot(data_longer, aes(x=feature_id, y=value, fill=LFI)) +
+  geom_boxplot(position = position_dodge()) ## wow! that was a deal but I got it!!!!!!!!!!!
+```
+
+
+### stageR following DRIMseq
+```{r}
+dim(res_LFIagedCR)
+dim(res.txp_LFIagedCR)
+
+# below we are keeping only the first 15 characters of the transcript NCBI IDs
+pScreen_LFIagedCR <- res_LFIagedCR$pvalue
+strp <- function(x) substr(x,1,15)
+names(pScreen_LFIagedCR) <- strp(res_LFIagedCR$gene_id)
+# we make one coulmn matric of confirmation p-values
+pConfirmation_LFIagedCR <- matrix(res.txp_LFIagedCR$pvalue, ncol=1)
+rownames(pConfirmation_LFIagedCR) <- strp(res.txp_LFIagedCR$feature_id)
+# We arrange a 2 coumn data frame with transcript and gene_IDs
+tx2gene_LFIagedCR <- res.txp_LFIagedCR[,c("feature_id","gene_id")]
+for(i in 1:2) tx2gene_LFIagedCR[,i] <- strp(tx2gene_LFIagedCR[,i])
+# the following performns the 'stageR' analysis
+library(stageR)
+stageRObj_LFIagedCR <- stageRTx(pScreen=pScreen_LFIagedCR,
+                      pConfirmation=pConfirmation_LFIagedCR,
+                      pScreenAdjusted=F,
+                      tx2gene=tx2gene)
+stageRObj_LFIagedCR <- stageWiseAdjustment(stageRObj_LFIagedCR,
+                                 method="dtu",
+                                 alpha=0.05)
+suppressWarnings({
+  drim.padj_LFIagedCR <- getAdjustedPValues(stageRObj_LFIagedCR, 
+                                  order=F, onlySignificantGenes=T)
+})
+head(drim.padj_LFIagedCR) # LOC101862197 same septin-11 as above in DRIMSeq. the gene is significant but the transcripts are not
+
+# The final table above with adjusted p-values summarizes the information from the two-stage analysis. Only genes that passed the filter are included in the table, so the table already represents screened genes
+# The transcripts with values in the column, transcript, less than 0.05 pass the confirmation stage on a target 5% overall false discovery rate, or OFDR. This means that, in expectation, no more than 5% of the genes that pass screening will either (1) not contain any DTU, so be falsely screened genes, or (2) contain a falsely confirmed transcript.
+```
+
+
+
+
+
+
