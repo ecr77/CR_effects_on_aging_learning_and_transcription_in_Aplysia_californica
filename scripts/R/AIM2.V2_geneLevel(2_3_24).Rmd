@@ -1,0 +1,1079 @@
+---
+title: "AIM2.V3_geneLevel(2_3_24)"
+output: html_document
+date: "2025-02-03"
+---
+
+####### Load libraries
+```{r}
+library(dplyr)
+library(tximport)
+library(DESeq2)
+library(ggplot2)
+library(sva)
+library(pheatmap) # for hierarchical clustering
+library(purrr) # for "set_names()"
+library(tibble)
+library(ggVennDiagram)
+library(UpSetR)
+library(GenomicFeatures)
+library(devtools) # for making the Org.db
+library(AnnotationForge)
+library(robustbase) # needed for rrcov
+library(rrcov) # for statistically testing for outliers in PCA
+library(stringr) # for str_detect to filter metadata
+library(xlsx)
+library(colorRamp2)
+
+library(PCAtools)
+library(ComplexHeatmap)
+```
+
+# Import data
+```{r}
+sample_table = read.csv("/Users/school/Projects/CR/samples.txt", header = T, stringsAsFactors = T)
+sample_table$P_SAV <- as.character(sample_table$P_SAV)
+sample_table$Age <- factor(sample_table$Age, levels = c("M","A") )
+sample_table$TRT <- factor(sample_table$TRT, levels = c("U", "T"))
+names(sample_table)[names(sample_table) == "TRT"] <- "LFI"
+row.names(sample_table)=sample_table$Sample_ID
+
+# Sample 840 (Aged, Trained, CR ; ATCR) is technically a dud since its TTIM on day1 = 68 sec. This animal was retrained and dissected because we were short on aged CR animals. Still, I think it best to exclude this sample.
+# I will delete this sample from the metadata file which will be used to import the sample data, so this sample will not be imported
+
+metadata <- sample_table[!(sample_table$Sample_ID %in% c("840")),]
+##
+
+paste0('/Users/school/Projects/CR/quants/', 
+       pull(metadata, RNAseq_ID), '/quant.sf')
+sample_files = paste0('/Users/school/Projects/CR/quants/',
+                      pull(metadata, RNAseq_ID), '/quant.sf')
+names(sample_files) = pull(metadata, Sample_ID)
+all(file.exists(sample_files))
+data.frame(thefiles = metadata, doihave = file.exists(sample_files))
+
+txdb_aplysia <- makeTxDbFromGFF("/Users/school/Documents/Documents/UAB/UAB009/genome/AplCal3.0_GFF.gff",
+                        format = "gff",
+                        organism = "Aplysia californica")
+k_aplysia <- keys(txdb_aplysia, keytype = "TXNAME")
+tx2gene_aplysia <- AnnotationDbi::select(txdb_aplysia, k_aplysia, "GENEID", "TXNAME")
+tx2gene_aplysia$TXNAME <- gsub("\\.[0-9]","",tx2gene_aplysia$TXNAME) 
+
+count_data = tximport(files = sample_files, importer=read.delim,
+         type = "salmon",
+         tx2gene = tx2gene_aplysia,
+         ignoreTxVersion = T)
+```
+
+## Model dds
+```{r}
+## as a comparison I will run this will all samples (ignoring any outlieres or DUDs)
+dds <- DESeqDataSetFromTximport(count_data,
+                                colData = metadata,
+                                design = ~ Age + LFI + Diet)
+colData(dds)
+dds$group <- factor(paste0(dds$Age, dds$LFI, dds$Diet))
+design(dds) <- ~group
+colData(dds)
+
+## counts pre-filtering
+dim(dds) # starting with 21,034 transcripts in 47 samples
+smallestGroupSize <- 5 # there are 5 samples in the smallest group
+keep <- rowSums(counts(dds) >= 1) >= smallestGroupSize
+dds2 <- dds[keep,]
+dim(dds2) # 11,876 transcripts in 47 samples
+```
+
+## Test for outliers in PCA
+```{r}
+vsd <- vst(dds2)
+# preform and plot Classical PCA
+pc12 <- plotPCA(vsd, intgroup = c("Age","LFI","Diet","group"), returnData = T) #PC1=26, PC2=18
+
+## add a column in the dataframe for training timepoint
+pc12$TT <- ifelse(pc12$Age == "M", "TT1", "TT2")
+## plot PCA with 99% CI to visually inspect the data
+ggplot(pc12, aes(x=PC1, y=PC2, color=TT)) +
+  geom_point(aes(fill=TT), 
+       colour="black",pch=21, size=5)  +
+  xlab(paste0("PC1: 26% varience")) +
+  ylab(paste0("PC2: 18% variance")) +
+  coord_fixed() +
+  stat_ellipse(level = 0.999) +
+  theme_bw() +
+  guides(fill=F) +
+  theme(axis.text.x=element_text(size=18), 
+        axis.title.x=element_text(size=18),
+        axis.text.y=element_text(size=18), 
+        axis.title.y=element_text(size=18),
+        legend.title = element_text(size=16),
+        legend.key.size = unit(0.6, 'cm'),
+        legend.position = c(0.91, 0.91)) +
+  scale_x_continuous(limits = c(-30, 30)) +
+  scale_y_continuous(limits = c(-30, 30)) +
+  labs(color = "Training Time")
+## After visual inspection there does appear to be some outlier samples as they fall outside of their respective 99% CI but in order to confidently exclude these samples I will run a Robust PCA. 
+## The first step is to get the names of the 500 genes that contributed to the PCA I just plotted. I will do this by modifying the DESeq2 function 'plotPCA' 
+DESeq2:::plotPCA.DESeqTransform # This code allows me to see the underlying script behind this function
+# I will make a new function by taking the first 2 lines of code and call this 'top500'
+top500 = function (object, ntop = 500)
+{
+  rv <- rowVars(assay(object))
+  select <- order(rv, decreasing = TRUE)[seq_len(min(ntop, length(rv)))]
+  top500 <- assay(object)[select,]
+}
+environment(top500) <- asNamespace('DESeq2') #this allows any hidden functions within the function to still work
+select <- rownames(top500(vsd)) # This give the 500 genes used to calculate the PCA in DESeq2
+rPCA <- PcaGrid(t(assay(vsd)[select,])) # This runs a Robust PCA on the vst data of the 500 genes
+plot(rPCA) # This plots the results from above. Samples that fall above the cutoff line are outliers (Chen et al 2020)
+## Outliers in these data are samples 809 and 805. Both outlier samples are Mature, CR, Untrained (M,U,CR) 
+# will now remove these samples form the metadata file and upload the remaining samples (essentially i will start over)
+```
+
+# Import data (outliers removed)
+```{r}
+sample_table = read.csv("/Users/school/Projects/CR/samples.txt", header = T, stringsAsFactors = T)
+sample_table$P_SAV <- as.character(sample_table$P_SAV)
+sample_table$Age <- factor(sample_table$Age, levels = c("M","A") )
+sample_table$TRT <- factor(sample_table$TRT, levels = c("U", "T"))
+names(sample_table)[names(sample_table) == "TRT"] <- "LFI"
+row.names(sample_table)=sample_table$Sample_ID
+
+# Sample 840 (Aged, Trained, CR ; ATCR) is technically a dud since its TTIM on day1 = 68 sec. This animal was retrained and dissected because we were short on aged CR animals. Still, I think it best to exclude this sample.
+# Samples 809 and 805 were determined to be outliers after performing a Robust PCA. Please see the code chunk above this one for more context. Both samples were (Mature, Untrained, CR ; MUCR)
+# I will delete this sample from the metadata file which will be used to import the sample data, so this sample will not be imported
+
+metadata <- sample_table[!(sample_table$Sample_ID %in% c("840","809","805")),]
+##
+
+paste0('/Users/school/Projects/CR/quants/', 
+       pull(metadata, RNAseq_ID), '/quant.sf')
+sample_files = paste0('/Users/school/Projects/CR/quants/',
+                      pull(metadata, RNAseq_ID), '/quant.sf')
+names(sample_files) = pull(metadata, Sample_ID)
+all(file.exists(sample_files))
+data.frame(thefiles = metadata, doihave = file.exists(sample_files))
+
+txdb_aplysia <- makeTxDbFromGFF("/Users/school/Documents/Documents/UAB/UAB009/genome/AplCal3.0_GFF.gff",
+                        format = "gff",
+                        organism = "Aplysia californica")
+k_aplysia <- keys(txdb_aplysia, keytype = "TXNAME")
+tx2gene_aplysia <- AnnotationDbi::select(txdb_aplysia, k_aplysia, "GENEID", "TXNAME")
+tx2gene_aplysia$TXNAME <- gsub("\\.[0-9]","",tx2gene_aplysia$TXNAME) 
+
+count_data = tximport(files = sample_files, importer=read.delim,
+         type = "salmon",
+         tx2gene = tx2gene_aplysia,
+         ignoreTxVersion = T)
+```
+
+## Model dds
+```{r}
+## as a comparison I will run this will all samples (ignoring any outlieres or DUDs)
+dds <- DESeqDataSetFromTximport(count_data,
+                                colData = metadata,
+                                design = ~ Age + LFI + Diet)
+colData(dds)
+dds$group <- factor(paste0(dds$Age, dds$LFI, dds$Diet))
+design(dds) <- ~group
+colData(dds)
+
+## counts pre-filtering
+dim(dds) # starting with 21,034 transcripts in 45 samples
+smallestGroupSize <- 4 # there are 4 samples in the smallest group
+keep <- rowSums(counts(dds) >= 1) >= smallestGroupSize
+dds2 <- dds[keep,]
+dim(dds2) # 12,314 transcripts in 45 samples
+```
+## PCA
+```{r}
+vsd <- vst(dds2)
+# preform and plot Classical PCA
+pc12 <- plotPCA(vsd, intgroup = c("Age","LFI","Diet","group"), returnData = T) #PC1=27, PC2=09
+
+## add a column in the dataframe for training timepoint
+pc12$TT <- ifelse(pc12$Age == "M", "TT1", "TT2")
+## plot PCA with 99% CI to visually inspect the data
+ggplot(pc12, aes(x=PC1, y=PC2, color=TT)) +
+  geom_point(aes(fill=TT), 
+       colour="black",pch=21, size=5)  +
+  xlab(paste0("PC1: 27% varience")) +
+  ylab(paste0("PC2: 09% variance")) +
+  coord_fixed() +
+  stat_ellipse(level = 0.999) +
+  theme_bw() +
+  guides(fill=F) +
+  theme(axis.text.x=element_text(size=18), 
+        axis.title.x=element_text(size=18),
+        axis.text.y=element_text(size=18), 
+        axis.title.y=element_text(size=18),
+        legend.title = element_text(size=16),
+        legend.key.size = unit(0.6, 'cm'),
+        legend.position = c(0.91, 0.91)) +
+  scale_x_continuous(limits = c(-40, 30)) +
+  scale_y_continuous(limits = c(-30, 30)) +
+  labs(color = "Training Time")
+
+#library(PCAtools)
+myDat <- DESeq(dds2)
+vsd4PCA <- vst(myDat)
+select <- rownames(top500(vsd4PCA))
+vsd4PCA <- assay(vsd4PCA)[select,]
+```
+
+#### Update pca function in PCAtools
+```{r}
+PCAtools:::pca # this lets me see what the original function is
+pcaUpdateFromPCAtools = function (mat, metadata = NULL, center = TRUE, scale = FALSE, 
+    rank = NULL, removeVar = NULL, transposed = FALSE, BSPARAM = ExactParam()) 
+{
+    if (is.data.frame(mat)) {
+        mat <- as.matrix(mat)
+    }
+    if (!transposed) {
+        mat <- t(mat)
+    }
+    if (!is.null(metadata)) {
+        if (!identical(rownames(mat), rownames(metadata))) {
+            stop("'colnames(mat)' is not identical to 'rownames(metadata)'")
+        }
+    }
+    .center <- if (center) 
+        NULL
+    else 0
+    vars <- matrixStats::colVars(as.matrix(DelayedArray(mat)), useNames = TRUE, 
+                                 center = .center)
+    if (!is.null(removeVar)) {
+        message("-- removing the lower ", removeVar * 100, "% of variables based on variance")
+        varorder <- order(vars, decreasing = TRUE)
+        keep <- head(varorder, max(1, ncol(mat) * (1 - removeVar)))
+        mat <- mat[, keep, drop = FALSE]
+        vars <- vars[keep]
+    }
+    if (is.null(rank)) {
+        if (is(BSPARAM, "ExactParam")) {
+            rank <- min(dim(mat))
+        }
+        else {
+            stop("'rank' must be specified for approximate PCA methods")
+        }
+    }
+    pcaobj <- runPCA(mat, center = center, scale = scale, rank = rank, 
+        BSPARAM = BSPARAM)
+    if (scale) {
+        total.var <- length(vars)
+    }
+    else {
+        total.var <- sum(vars)
+    }
+    proportionvar <- (pcaobj$sdev^2)/total.var * 100
+    pcaobj <- list(rotated = data.frame(pcaobj$x), loadings = data.frame(pcaobj$rotation), 
+        variance = proportionvar, sdev = pcaobj$sdev, metadata = metadata, 
+        xvars = colnames(mat), yvars = rownames(mat), components = colnames(pcaobj$x))
+    rownames(pcaobj$rotated) <- pcaobj$yvars
+    rownames(pcaobj$loadings) <- pcaobj$xvars
+    names(pcaobj$variance) <- pcaobj$components
+    class(pcaobj) <- "pca"
+    return(pcaobj)
+} # this updated the function and named it something else
+environment(pcaUpdateFromPCAtools) <- asNamespace('PCAtools') # this lets R know that this function should be in the namespace of PCAtools to allow any nested functions within this updated function to work properly
+assignInNamespace('pca', pcaUpdateFromPCAtools, ns = 'PCAtools') # this now tells R to replace 'pca' with the updated function any time 'pca' is called in PCAtools
+```
+
+## PCA (continued)
+```{r}
+p <- pcaUpdateFromPCAtools(vsd4PCA, metadata = colData(myDat))
+moreThan70percentVarience <- which(cumsum(p$variance) > 70)[1] # find which PC = >70% variance
+# plot where >70% variance is in the PCs
+PCAtools::screeplot(p,
+                    components = getComponents(p, 1:16),
+                    vline = moreThan70percentVarience) +
+  geom_label(aes(x=moreThan70percentVarience + 1, y = 60,
+                 label = ">70%", vjust = -1, size = 8))
+
+# correlate traits to PCs to investigate what trait drives the variance in that PC (useing only PCs up to 70% variance)
+PCAtools::eigencorplot(p,
+             components = getComponents(p, 1:12),
+             metavars = c("Age","Diet","LFI","group"),
+             col = c('darkblue','blue2','black','red2','darkred'),
+             cexCorval = 0.8,
+             colCorval = 'white',
+             fontCorval = 2,
+             posLab = 'bottomleft',
+             rotLabX = 45,
+             posColKey = 'top',
+             cexLabColKey = 1.5,
+             scale = T,
+             main = 'PC1-12 trait correlations',
+             colFrame = 'white',
+             plotRsquared = F) # LFI is not a significant driver of variance
+##In PCAtools, a "negative correlate to PC" means that a variable has a negative correlation with a particular principal component (PC), indicating that as the PC value increases, the variable tends to decrease, and vice versa; essentially showing an inverse relationship between the variable and the PC
+## we will only look at positive correlations PC1 for Age and PC8 for Diet
+```
+### Modify plotPCA function in DESeq2
+```{r}
+DESeq2:::plotPCA.DESeqTransform
+plotPCA8.9 = function (object, intgroup = "condition", ntop = 500, returnData = FALSE) 
+{
+    rv <- rowVars(assay(object))
+    select <- order(rv, decreasing = TRUE)[seq_len(min(ntop, 
+        length(rv)))]
+    pca <- prcomp(t(assay(object)[select, ]))
+    percentVar <- pca$sdev^2/sum(pca$sdev^2)
+    if (!all(intgroup %in% names(colData(object)))) {
+        stop("the argument 'intgroup' should specify columns of colData(dds)")
+    }
+    intgroup.df <- as.data.frame(colData(object)[, intgroup, 
+        drop = FALSE])
+    group <- if (length(intgroup) > 1) {
+        factor(apply(intgroup.df, 1, paste, collapse = ":"))
+    }
+    else {
+        colData(object)[[intgroup]]
+    }
+    d <- data.frame(PC8 = pca$x[, 8], PC9 = pca$x[, 9], group = group, 
+        intgroup.df, name = colnames(object))
+    if (returnData) {
+        attr(d, "percentVar") <- percentVar[8:9]
+        return(d)
+    }
+    ggplot(data = d, aes_string(x = "PC8", y = "PC9", color = "group")) + 
+        geom_point(size = 3) + xlab(paste0("PC8: ", round(percentVar[8] * 
+        100), "% variance")) + ylab(paste0("PC9: ", round(percentVar[9] * 
+        100), "% variance")) + coord_fixed()
+}
+environment(plotPCA8.9) <- asNamespace('DESeq2')
+```
+
+## PCA (continued)
+```{r}
+pc89 <- plotPCA8.9(vsd, intgroup = c("Age","LFI","Diet","group"), returnData = T) #PC8=03, PC9=03
+## plot PCA with 99% CI to visually inspect the data
+ggplot(pc89, aes(x=PC8, y=PC9, color=Diet)) +
+  geom_point(aes(fill=Diet), 
+       colour="black",pch=21, size=5)  +
+  scale_fill_manual(values = c("gold","turquoise")) +
+  xlab(paste0("PC8: 03% varience")) +
+  ylab(paste0("PC9: 03% variance")) +
+  coord_fixed() +
+  scale_color_manual(labels = c("AL","CR"),
+                    values = c("gold","turquoise")) +
+  stat_ellipse(level = 0.999) +
+  theme_bw() +
+  guides(fill=F) +
+  theme(axis.text.x=element_text(size=18), 
+        axis.title.x=element_text(size=18),
+        axis.text.y=element_text(size=18), 
+        axis.title.y=element_text(size=18),
+        legend.title = element_text(size=16),
+        legend.key.size = unit(0.6, 'cm'),
+        legend.position = c(0.91, 0.91)) +
+  scale_x_continuous(limits = c(-15, 15)) +
+  scale_y_continuous(limits = c(-15, 15))
+```
+
+## DESeq2
+```{r}
+myDat <- DESeq(dds2)
+## Age differences
+# AUAL vs MUAL
+summary(DESeq2::results(myDat, contrast = c("group", "AUAL", "MUAL"), alpha = 0.05, lfcThreshold = 0))
+AUAL_vs_MUALresSig <- subset(DESeq2::results(myDat, contrast = c("group", "AUAL", "MUAL"), lfcThreshold = 0), padj < 0.05)
+#############################################################################
+## LFI in Mature
+# MTAL vs MUAL
+summary(DESeq2::results(myDat, contrast = c("group", "MTAL", "MUAL"), alpha = 0.05, lfcThreshold = 0))
+MTAL_vs_MUALresSig <- subset(DESeq2::results(myDat, contrast = c("group", "MTAL", "MUAL"), lfcThreshold = 0), padj < 0.05)
+#############################################################################
+## LFI in Aged
+# ATAL vs AUAL
+summary(DESeq2::results(myDat, contrast = c("group", "ATAL", "AUAL"), alpha = 0.05, lfcThreshold = 0))
+ATAL_vs_AUALresSig <- subset(DESeq2::results(myDat, contrast = c("group", "ATAL", "AUAL"), lfcThreshold = 0), padj < 0.05)
+#############################################################################
+## Age under CR
+# AUCR vs MUCR
+summary(DESeq2::results(myDat, contrast = c("group", "AUCR", "MUCR"), alpha = 0.05, lfcThreshold = 0))
+AUCR_vs_MUCRresSig <- subset(DESeq2::results(myDat, contrast = c("group", "AUCR", "MUCR"), lfcThreshold = 0), padj < 0.05)
+#############################################################################
+## LFI in Mature CR
+# MTCR vs MUCR
+summary(DESeq2::results(myDat, contrast = c("group", "MTCR", "MUCR"), alpha = 0.05, lfcThreshold = 0))
+MTCR_vs_MUCRresSig <- subset(DESeq2::results(myDat, contrast = c("group", "MTCR", "MUCR"), lfcThreshold = 0), padj < 0.05)
+#############################################################################
+## LFI in Aged CR
+# ATCR vs AUCR
+summary(DESeq2::results(myDat, contrast = c("group", "ATCR", "AUCR"), alpha = 0.05, lfcThreshold = 0))
+ATCR_vs_AUCRresSig <- subset(DESeq2::results(myDat, contrast = c("group", "ATCR", "AUCR"), lfcThreshold = 0), padj < 0.05)
+
+
+
+#########################################################################
+## I will plot ALL DEGs
+# first make a dataframe with all the DEGS
+AUAL_vs_MUAL_DEGl2fc <- AUAL_vs_MUALresSig[2] %>% as.data.frame() %>%
+  rownames_to_column() %>% set_names(c("Gene", "AUAL_vs_MUAL_l2fc"))
+MTAL_vs_MUALDEGl2fc <- MTAL_vs_MUALresSig[2] %>% as.data.frame() %>%
+  rownames_to_column() %>% set_names(c("Gene", "MTAL_vs_MUAL_l2fc"))
+ATAL_vs_AUALDEGl2fc <- ATAL_vs_AUALresSig[2] %>% as.data.frame() %>%
+  rownames_to_column() %>% set_names(c("Gene", "ATAL_vs_AUAL_l2fc"))
+AUCR_vs_MUCRDEGl2fc <- AUCR_vs_MUCRresSig[2] %>% as.data.frame() %>%
+  rownames_to_column() %>% set_names(c("Gene", "AUCR_vs_MUCR_l2fc"))
+MTCR_vs_MUCRDEGl2fc <- MTCR_vs_MUCRresSig[2] %>% as.data.frame() %>%
+  rownames_to_column() %>% set_names(c("Gene", "MTCR_vs_MUCR_l2fc"))
+ATCR_vs_AUCRDEGl2fc <- ATCR_vs_AUCRresSig[2] %>% as.data.frame() %>%
+  rownames_to_column() %>% set_names(c("Gene", "ATCR_vs_AUCR_l2fc"))
+
+listInputs_1 <- list("Age AL" = AUAL_vs_MUAL_DEGl2fc$Gene,
+                   "LFI young AL" = MTAL_vs_MUALDEGl2fc$Gene,
+                   "LFI aged AL" = ATAL_vs_AUALDEGl2fc$Gene,
+                   "Age CR" = AUCR_vs_MUCRDEGl2fc$Gene,
+                   "LFI young CR" = MTCR_vs_MUCRDEGl2fc$Gene,
+                   "LFI aged CR" = ATCR_vs_AUCRDEGl2fc$Gene)
+upset(fromList(listInputs_1), sets=c("Age AL", "LFI young AL", "LFI aged AL", "Age CR", "LFI young CR", "LFI aged CR"), order.by = "degree")
+
+AllDEGs <- full_join(AUAL_vs_MUAL_DEGl2fc, MTAL_vs_MUALDEGl2fc, by = "Gene")
+AllDEGs <- full_join(AllDEGs, ATAL_vs_AUALDEGl2fc, by = "Gene")
+AllDEGs <- full_join(AllDEGs, AUCR_vs_MUCRDEGl2fc, by = "Gene")
+AllDEGs <- full_join(AllDEGs, MTCR_vs_MUCRDEGl2fc, by = "Gene")
+AllDEGs <- full_join(AllDEGs, ATCR_vs_AUCRDEGl2fc, by = "Gene")
+```
+## Annotation
+```{r}
+## annotate my genes
+library(org.Acalifornica.eg.db) # I made this Org.db using AnnotationForge
+AllDEGs
+keytypes(org.Acalifornica.eg.db)
+symbols <- mapIds(org.Acalifornica.eg.db, keys = AllDEGs$Gene,
+                  column = c('GENENAME'), keytype = 'SYMBOL')
+AllDEGs$geneName <- symbols 
+AllDEGs <- AllDEGs[,c(1,8,2,3,4,5,6,7)] #reorder the dataframe to put geneName after GeneID
+# write.xlsx(AllDEGs,"/Users/school/Documents/UAB/UAB009/Results/AllDEGs.xlsx", sheetName = "All_comps", append = T, row.names = F) # 58 DEGs
+```
+
+## Heatmaps of common DEGs
+```{r}
+# MTCR_vs_MUCRDEGl2fc
+# MTAL_vs_MUALDEGl2fc
+# AUAL_vs_MUAL_DEGl2fc
+Set1 <- merge(MTCR_vs_MUCRDEGl2fc, MTAL_vs_MUALDEGl2fc, by="Gene")
+Set1 <- merge(Set1, AUAL_vs_MUAL_DEGl2fc, by = "Gene")
+Set1$geneNames <- mapIds(org.Acalifornica.eg.db, keys = Set1$Gene,
+                  column = c('GENENAME'), keytype = 'SYMBOL') # this gets the gene names
+Set1 <- Set1 %>% rowwise() %>% mutate(geneNames = if_else(any(grepl(Gene, geneNames)), geneNames, paste(geneNames,"(", Gene, ")"))) %>% as.data.frame()
+rownames(Set1) = Set1$geneNames
+colo = colorRamp2(c(-13, 0, 13), c("green", "black", "red"))
+Heatmap(Set1[,c(-1,-5)], col = colo, show_heatmap_legend = F, row_names_gp = gpar(fontsize=14), column_names_gp = gpar(fontsize=10), column_names_rot = 0, column_names_centered = T, column_labels = c("LFI young AL", "Age AL", "LFI young CR"), width = unit(8, "cm"))
+
+
+# comon genes in training between the diets ####################
+# MTCR_vs_MUCRDEGl2fc
+# MTAL_vs_MUALDEGl2fc
+Set2 <- merge(MTCR_vs_MUCRDEGl2fc, MTAL_vs_MUALDEGl2fc, by="Gene")
+Set2$geneNames <- mapIds(org.Acalifornica.eg.db, keys = Set2$Gene,
+                  column = c('GENENAME'), keytype = 'SYMBOL') # this gets the gene names
+Set2 <- Set2 %>% rowwise() %>% mutate(geneNames = if_else(any(grepl(Gene, geneNames)), geneNames, paste(geneNames,"(", Gene, ")"))) %>% as.data.frame()
+rownames(Set2) = Set2$geneNames
+Heatmap(Set2[,c(-1,-4)], col = colo, show_heatmap_legend = F, row_names_gp = gpar(fontsize=14), column_names_gp = gpar(fontsize=10), column_names_rot = 0, column_names_centered = T,  column_labels = c("LFI young AL", "LFI young CR"), width = unit(8, "cm")) # one difference from above
+
+
+# MTAL_vs_MUALDEGl2fc
+# AUAL_vs_MUAL_DEGl2fc
+Set3 <- merge(MTAL_vs_MUALDEGl2fc, AUAL_vs_MUAL_DEGl2fc, by="Gene")
+Set3$geneNames <- mapIds(org.Acalifornica.eg.db, keys = Set3$Gene,
+                  column = c('GENENAME'), keytype = 'SYMBOL') # this gets the gene names
+Set3 <- Set3 %>% rowwise() %>% mutate(geneNames = if_else(any(grepl(Gene, geneNames)), geneNames, paste(geneNames,"(", Gene, ")"))) %>% as.data.frame()
+rownames(Set3) = Set3$geneNames
+Heatmap(Set3[,c(-1,-4)], col = colo, show_heatmap_legend = F, row_names_gp = gpar(fontsize=14), column_names_gp = gpar(fontsize=10), column_names_rot = 0, column_names_centered = T,  column_labels = c("LFI young AL", "Age AL"), width = unit(8, "cm"))
+
+
+# MTCR_vs_MUCRDEGl2fc
+# AUCR_vs_MUCRDEGl2fc
+Set4 <- merge(MTCR_vs_MUCRDEGl2fc, AUCR_vs_MUCRDEGl2fc, by="Gene")
+Set4$geneNames <- mapIds(org.Acalifornica.eg.db, keys = Set4$Gene,
+                  column = c('GENENAME'), keytype = 'SYMBOL') # this gets the gene names
+Set4 <- Set4 %>% rowwise() %>% mutate(geneNames = if_else(any(grepl(Gene, geneNames)), geneNames, paste(geneNames,"(", Gene, ")"))) %>% as.data.frame()
+rownames(Set4) = Set4$geneNames
+Heatmap(Set4[,c(-1,-4)], col = colo, show_heatmap_legend = F, row_names_gp = gpar(fontsize=14), column_names_gp = gpar(fontsize=10), column_names_rot = 0, column_names_centered = T,  column_labels = c("LFI young CR", "Age CR"), width = unit(8, "cm"))
+
+
+## Age between the diets ######################
+# AUAL_vs_MUAL_DEGl2fc
+# AUCR_vs_MUCRDEGl2fc
+Set5 <- merge(AUAL_vs_MUAL_DEGl2fc, AUCR_vs_MUCRDEGl2fc, by="Gene")
+Set5$geneNames <- mapIds(org.Acalifornica.eg.db, keys = Set5$Gene,
+                  column = c('GENENAME'), keytype = 'SYMBOL') # this gets the gene names
+Set5 <- Set5 %>% rowwise() %>% mutate(geneNames = if_else(any(grepl(Gene, geneNames)), geneNames, paste(geneNames,"(", Gene, ")"))) %>% as.data.frame()
+rownames(Set5) = Set5$geneNames
+Heatmap(Set5[,c(-1,-4)], col = colo, show_heatmap_legend = F, row_names_gp = gpar(fontsize=14), column_names_gp = gpar(fontsize=10), column_names_rot = 0, column_names_centered = T,  column_labels = c("Age CR", "Age AL"), width = unit(8, "cm"))
+```
+
+## Hiearchcal clusterng
+```{r}
+# rlog_out <- rlog(dds2, blind = F)
+# dds.1 <- estimateSizeFactors(dds2)
+# select.1 <- order(rowMeans(counts(dds.1, normalized=T)), decreasing = T)
+# df <- as.data.frame(colData(dds2)[,c("Age","LFI","Diet")])
+# mat1 <- assay(rlog_out[1:2000])
+# colnames(mat1)
+# mat1.scaled <- t(apply(mat1, 1, scale))
+# colnames(mat1.scaled) <- colnames(mat1)
+# dim(mat1.scaled) #2,000 genes, 45 samples
+# pheatmap(mat1.scaled, annotation_col = df)
+# # above was to test if samples would cluster according to treatment if global gene expression was graphed. I could only graph 2000 genes though and no such luck in sample grouping
+
+
+## Below is graphing only the DEGs and seeing how samples cluster
+rlog_out2 <- rlog(dds2, blind = F)
+mat1.2 <- assay(rlog_out2)[AllDEGs$Gene,]
+colnames(mat1.2)
+df2 <- as.data.frame(colData(dds2)[,c("Age","LFI","Diet")])
+df3 <- df2 %>% rename("Training Time" = Age)
+df3$`Training Time` <- ifelse(df3$`Training Time` == "M", "TT1", "TT2")
+mat1.2scaled <- t(apply(mat1.2, 1, scale))
+colnames(mat1.2scaled) <- colnames(mat1.2)
+dim(mat1.2scaled)
+pheatmap(mat1.2scaled, name = "z-score", annotation_col = df3, cluster_rows = T, cluster_cols = T, show_rownames = F, cutree_rows = 5)
+```
+
+## Functional analyses
+#####GO (gse)
+```{r}
+library(clusterProfiler)
+## I was having a problem with reproduceability while running gene-set enrichment below. I was getting different numbers of gene ontology terms each time I re-ran the assay. So I looked it up and there may be some sort of seed issue (some randomness) that changes each time I run it: (https://support.bioconductor.org/p/99810/), (https://github.com/YuLab-SMU/clusterProfiler/issues/190).
+### I will attempt to set the seed using 'set.seed()' (https://www.statology.org/set-seed-in-r/)
+set.seed(1234) # setting the seed to make the below code reproducible
+## Age differences
+# AUAL vs MUAL
+AUAL_MUAL_GO <- results(myDat, contrast = c("group", "AUAL", "MUAL"), alpha = 0.05, lfcThreshold = 0)
+AgeAL_GO <- as.data.frame(AUAL_MUAL_GO)
+AgeAL_GO$Gene <- rownames(AgeAL_GO)
+
+original_gene_list_AgeAL <- AgeAL_GO$log2FoldChange
+names(original_gene_list_AgeAL) <- AgeAL_GO$Gene
+gene_list_AgeAL <- na.omit(original_gene_list_AgeAL)
+gene_list_AgeAL = sort(gene_list_AgeAL, decreasing = T)
+
+gse_AgeAL <- gseGO(geneList = gene_list_AgeAL, #[1st pass: 185, 2nd pass: 189] (before seed was set), 3rd pass: 209 (after seed.set) 4th pass: 209 again! (I think this worked) 5th pass: 209 terms (after seed.set)
+                   ont = "ALL",
+                   keyType = "SYMBOL",
+                   minGSSize = 3,
+                   maxGSSize = 800,
+                   pvalueCutoff = 0.05,
+                   verbose = TRUE,
+                   OrgDb = org.Acalifornica.eg.db,
+                   pAdjustMethod = "none",
+                   seed = TRUE)
+## filter by qvalue less than 0.80
+gse_AgeAL_filterByQvalue <- gse_AgeAL %>% filter(qvalue < 0.80)
+## graph
+ggplot(gse_AgeAL_filterByQvalue, showCategory=10, split="ONTOLOGY", aes(x = NES, y = Description, fill=qvalue)) +
+  geom_col() + facet_grid(ONTOLOGY~., scale="free") +
+  theme_bw() + 
+  theme(axis.text.y = element_text(color="black")) + 
+  labs(title = "Age AL", y="")# I think this the graph I want! This shows me the top whatever I choose in 'showCategory' the GO are normalized so if the bar goes to negative they are suppressed and if bar goes positive they are activated and this is split by ontology CC, MF, and BP
+## This basically combines the two graphs above
+## Saved as PDF 5x7 (landscape)
+
+#############################################################################
+## LFI in Mature
+# MTAL vs MUAL
+MTAL_MUAL_GO <- results(myDat, contrast = c("group", "MTAL", "MUAL"), alpha = 0.05, lfcThreshold = 0)
+LFIyoungAL_GO <- as.data.frame(MTAL_MUAL_GO)
+LFIyoungAL_GO$Gene <- rownames(LFIyoungAL_GO) #11,852 genes
+
+original_gene_list_LFIyoungAL <- LFIyoungAL_GO$log2FoldChange #11,852 genes
+names(original_gene_list_LFIyoungAL) <- LFIyoungAL_GO$Gene #11,852 genes
+gene_list_LFIyoungAL <- na.omit(original_gene_list_LFIyoungAL) #11,852 genes
+gene_list_LFIyoungAL = sort(gene_list_LFIyoungAL, decreasing = T) #11,852 genes
+
+gse_LFIyoungAL <- gseGO(geneList = gene_list_LFIyoungAL, # 142 terms after seed.set
+                   ont = "ALL",
+                   keyType = "SYMBOL",
+                   minGSSize = 3,
+                   maxGSSize = 800,
+                   pvalueCutoff = 0.05,
+                   verbose = TRUE,
+                   OrgDb = org.Acalifornica.eg.db,
+                   pAdjustMethod = "none",
+                   seed = TRUE) 
+## filter by qvalue less than 0.80
+gse_LFIyoungAL_filterByQvalue <- gse_LFIyoungAL %>% filter(qvalue < 0.80)
+## graph
+ggplot(gse_LFIyoungAL_filterByQvalue, showCategory=10, split="ONTOLOGY", aes(x = NES, y = Description, fill=qvalue)) +
+  geom_col() + facet_grid(ONTOLOGY~., scale="free") +
+  theme_bw() + 
+  theme(axis.text.y = element_text(color="black")) + 
+  labs(title = "LFI young AL", y="") ## Saved as PDF 5x7 (landscape)
+#############################################################################
+## LFI in Aged
+# ATAL vs AUAL
+ATAL_AUAL_GO <- results(myDat, contrast = c("group", "ATAL", "AUAL"), alpha = 0.05, lfcThreshold = 0)
+LFIagedAL_GO <- as.data.frame(ATAL_AUAL_GO)
+LFIagedAL_GO$Gene <- rownames(LFIagedAL_GO) #11,852 genes
+
+original_gene_list_LFIagedAL <- LFIagedAL_GO$log2FoldChange #11,852 genes
+names(original_gene_list_LFIagedAL) <- LFIagedAL_GO$Gene #11,852 genes
+gene_list_LFIagedAL <- na.omit(original_gene_list_LFIagedAL) #11,852 genes
+gene_list_LFIagedAL = sort(gene_list_LFIagedAL, decreasing = T) #11,852 genes
+
+gse_LFIagedAL <- gseGO(geneList = gene_list_LFIagedAL, #188 GO terms after seed.set
+                   ont = "ALL",
+                   keyType = "SYMBOL",
+                   minGSSize = 3,
+                   maxGSSize = 800,
+                   pvalueCutoff = 0.05,
+                   verbose = TRUE,
+                   OrgDb = org.Acalifornica.eg.db,
+                   pAdjustMethod = "none",
+                   seed = TRUE) 
+## filter by qvalue less than 0.80
+gse_LFIagedAL_filterByQvalue <- gse_LFIagedAL %>% filter(qvalue < 0.80)
+## graph
+ggplot(gse_LFIagedAL_filterByQvalue, showCategory=10, split="ONTOLOGY", aes(x = NES, y = Description, fill=qvalue)) +
+  geom_col() + facet_grid(ONTOLOGY~., scale="free") +
+  theme_bw() + 
+  theme(axis.text.y = element_text(color="black")) + 
+  labs(title = "LFI aged AL", y="") ## Saved as PDF 5x7 (landscape)
+#############################################################################
+## Age under CR
+# AUCR vs MUCR
+AUCR_MUCR_GO <- results(myDat, contrast = c("group", "AUCR", "MUCR"), alpha = 0.05, lfcThreshold = 0)
+AgeCR_GO <- as.data.frame(AUCR_MUCR_GO)
+AgeCR_GO$Gene <- rownames(AgeCR_GO)
+
+original_gene_list_AgeCR <- AgeCR_GO$log2FoldChange
+names(original_gene_list_AgeCR) <- AgeCR_GO$Gene
+gene_list_AgeCR <- na.omit(original_gene_list_AgeCR)
+gene_list_AgeCR = sort(gene_list_AgeCR, decreasing = T)
+
+gse_AgeCR <- gseGO(geneList = gene_list_AgeCR, #298 GO terms after seed.set
+                   ont = "ALL",
+                   keyType = "SYMBOL",
+                   minGSSize = 3,
+                   maxGSSize = 800,
+                   pvalueCutoff = 0.05,
+                   verbose = TRUE,
+                   OrgDb = org.Acalifornica.eg.db,
+                   pAdjustMethod = "none",
+                   seed = TRUE)
+
+## filter by qvalue less than 0.80
+gse_AgeCR_filterByQvalue <- gse_AgeCR %>% filter(qvalue < 0.80)
+## graph
+ggplot(gse_AgeCR_filterByQvalue, showCategory=10, split="ONTOLOGY", aes(x = NES, y = Description, fill=qvalue)) +
+  geom_col() + facet_grid(ONTOLOGY~., scale="free") +
+  theme_bw() + 
+  theme(axis.text.y = element_text(color="black")) + 
+  labs(title = "Age CR", y="") ## Saved as PDF 5x7 (landscape)
+#############################################################################
+## LFI in Mature CR
+# MTCR vs MUCR
+MTCR_MUCR_GO <- results(myDat, contrast = c("group", "MTCR", "MUCR"), alpha = 0.05, lfcThreshold = 0)
+LFIyoungCR_GO <- as.data.frame(MTCR_MUCR_GO)
+LFIyoungCR_GO$Gene <- rownames(LFIyoungCR_GO)
+
+original_gene_list_LFIyoungCR <- LFIyoungCR_GO$log2FoldChange
+names(original_gene_list_LFIyoungCR) <- LFIyoungCR_GO$Gene
+gene_list_LFIyoungCR <- na.omit(original_gene_list_LFIyoungCR)
+gene_list_LFIyoungCR = sort(gene_list_LFIyoungCR, decreasing = T)
+
+gse_LFIyoungCR <- gseGO(geneList = gene_list_LFIyoungCR, # 117 terms after seed.set
+                   ont = "ALL",
+                   keyType = "SYMBOL",
+                   minGSSize = 3,
+                   maxGSSize = 800,
+                   pvalueCutoff = 0.05,
+                   verbose = TRUE,
+                   OrgDb = org.Acalifornica.eg.db,
+                   pAdjustMethod = "none",
+                   seed = TRUE)
+
+## filter by qvalue less than 0.80
+gse_LFIyoungCR_filterByQvalue <- gse_LFIyoungCR %>% filter(qvalue < 0.80)
+## graph
+ggplot(gse_LFIyoungCR_filterByQvalue, showCategory=10, split="ONTOLOGY", aes(x = NES, y = Description, fill=qvalue)) +
+  geom_col() + facet_grid(ONTOLOGY~., scale="free") +
+  theme_bw() + 
+  theme(axis.text.y = element_text(color="black")) + 
+  labs(title = "LFI young CR", y="") ## Did not save as qvalue cutoff left me with no terms
+#############################################################################
+## LFI in Aged CR
+# ATCR vs AUCR
+ATCR_AUCR_GO <- results(myDat, contrast = c("group", "ATCR", "AUCR"), alpha = 0.05, lfcThreshold = 0)
+LFIageCR_GO <- as.data.frame(ATCR_AUCR_GO)
+LFIageCR_GO$Gene <- rownames(LFIageCR_GO)
+
+original_gene_list_LFIageCR <- LFIageCR_GO$log2FoldChange
+names(original_gene_list_LFIageCR) <- LFIageCR_GO$Gene
+gene_list_LFIageCR <- na.omit(original_gene_list_LFIageCR)
+gene_list_LFIageCR = sort(gene_list_LFIageCR, decreasing = T)
+
+gse_LFIageCR <- gseGO(geneList = gene_list_LFIageCR, #181 terms after seed.set
+                   ont = "ALL",
+                   keyType = "SYMBOL",
+                   minGSSize = 3,
+                   maxGSSize = 800,
+                   pvalueCutoff = 0.05,
+                   verbose = TRUE,
+                   OrgDb = org.Acalifornica.eg.db,
+                   pAdjustMethod = "none",
+                   seed = TRUE)
+
+## filter by qvalue less than 0.80
+gse_LFIageCR_filterByQvalue <- gse_LFIageCR %>% filter(qvalue < 0.80)
+## graph
+ggplot(gse_LFIageCR_filterByQvalue, showCategory=10, split="ONTOLOGY", aes(x = NES, y = Description, fill=qvalue)) +
+  geom_col() + facet_grid(ONTOLOGY~., scale="free") +
+  theme_bw() + 
+  theme(axis.text.y = element_text(color="black")) + 
+  labs(title = "LFI aged CR", y="") ## Saved as PDF 5x7 (landscape)
+
+
+## I should only look at GO terms that have qvalues less that 1. 
+## A qvalue is an estimate of the false discovery rate (FDR) which takes into account all the multiple test corrections. 
+## A qvalue of 1 indicates that the geneset is not significant or that it is not significant over chance. https://genome.ucsc.edu/goldenPath/help/qValue.html#:~:text=The%20q%2Dvalue%20is%20an,among%20a%20collection%20of%20scores.
+## I corrected this above by filtering the gse results by qvalue < 0.8 before I graph them. This is still a super high qvalue but it gives me some thins to look at
+```
+
+###### Compare together
+```{r}
+#########################################################################
+## I will plot ALL GO terms from all comparisons
+# first make a dataframe with all the GO terms
+AgeAL_GOterms <- as.data.frame(gse_AgeAL_filterByQvalue)[,c(3,6)] %>% 'rownames<-'(NULL) %>%
+  set_names(c("GO.term", "AgeAL_NES"))
+LFIyoungAL_GOterms <- as.data.frame(gse_LFIyoungAL_filterByQvalue)[,c(3,6)] %>% 'rownames<-'(NULL) %>%
+  set_names(c("GO.term", "LFIyoungAL_NES"))
+LFIagedAL_GOterms <- as.data.frame(gse_LFIagedAL_filterByQvalue)[,c(3,6)] %>% 'rownames<-'(NULL) %>%
+  set_names(c("GO.term", "LFIagedAL_NES"))
+AgeCR_GOterms <- as.data.frame(gse_AgeCR_filterByQvalue)[,c(3,6)] %>% 'rownames<-'(NULL) %>%
+  set_names(c("GO.term", "AgeCR_NES"))
+LFIyoungCR_GOterms <- as.data.frame(gse_LFIyoungCR_filterByQvalue)[,c(3,6)] %>% 'rownames<-'(NULL) %>%
+  set_names(c("GO.term", "LFIyoungCR_NES"))
+LFIageCR_GOterms <- as.data.frame(gse_LFIageCR_filterByQvalue)[,c(3,6)] %>% 'rownames<-'(NULL) %>%
+  set_names(c("GO.term", "LFIageCR_NES"))
+
+listInputs_2 <- list("AgeAL_GOterms" = AgeAL_GOterms$GO.term,
+                   "LFIyoungAL_GOterms" = LFIyoungAL_GOterms$GO.term,
+                   "LFIagedAL_GOterms" = LFIagedAL_GOterms$GO.term,
+                   "AgeCR_GOterms" = AgeCR_GOterms$GO.term,
+                   "LFIyoungCR_GOterms" = LFIyoungCR_GOterms$GO.term,
+                   "LFIageCR_GOterms" = LFIageCR_GOterms$GO.term)
+upset(fromList(listInputs_2), sets=c("AgeAL_GOterms", "LFIyoungAL_GOterms", "LFIagedAL_GOterms", "AgeCR_GOterms", "LFIyoungCR_GOterms", "LFIageCR_GOterms"), order.by = "degree")
+
+# the upset plot indicated there are 5 shared GO terms between age and ageLFI in AL and I want to see what they are and if they change after LFI
+# I will merge the two datasets together to investigate
+Age_and_LFI_in_AL <- merge(AgeAL_GOterms, LFIagedAL_GOterms, by = "GO.term")
+## I want to plot these 5 terms together, maybe with dot plot...
+# test <- filter(gse_AgeAL_filterByQvalue, Description %in% Age_and_LFI_in_AL$GO.term)
+# test$Description # the above filter works great! the code I was looking for was "%in%"
+AgeAL_GOterms_commonWlfi <- gse_AgeAL_filterByQvalue %>% filter(Description %in% Age_and_LFI_in_AL$GO.term)
+LFIagedAL_GOterms_commonWage <- gse_LFIagedAL_filterByQvalue %>% filter(Description %in% Age_and_LFI_in_AL$GO.term)
+
+mlist2 <- list(AgeAL_GOterms_commonWlfi, LFIagedAL_GOterms_commonWage)
+names(mlist2)<-c("Age AL", "LFI aged AL")
+mresults2<-merge_result(mlist2)
+dotplot(mresults2, showCategory=5, split=".sign", includeAll=T) + 
+  facet_grid(.~.sign) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  xlab("")
+
+
+
+
+AllGOterms <- full_join(AgeAL_GOterms, LFIyoungAL_GOterms, by = "GO.term")
+AllGOterms <- full_join(AllGOterms, LFIagedAL_GOterms, by = "GO.term")
+AllGOterms <- full_join(AllGOterms, AgeCR_GOterms, by = "GO.term")
+AllGOterms <- full_join(AllGOterms, LFIyoungCR_GOterms, by = "GO.term")
+AllGOterms <- full_join(AllGOterms, LFIageCR_GOterms, by = "GO.term")
+
+
+
+# write.xlsx(AllGOterms,"/Users/school/Documents/UAB/UAB009/Results/AllFunctionalAnalyses.xlsx", sheetName = "All_GOs", append = F, row.names = F) # 889 GO terms
+
+mlist3 <- list(gse_AgeAL_filterByQvalue, gse_AgeCR_filterByQvalue)
+names(mlist3)<-c("Age AL", "Age CR")
+mresults3<-merge_result(mlist3)
+dotplot(mresults3, showCategory=5, split=".sign", includeAll=T) + 
+  facet_grid(.~.sign) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  xlab("")
+```
+
+###KEGG (gse)
+###### making 'protein to gene to transcript' dataframes for Aplysia
+```{r}
+## Make protein to gene to transcript dataframe for fish (X_maculatus)
+# load in my gff
+Apl_GFF = read.delim("/Users/school/Documents/Documents/UAB/UAB009/genome/AplCal3.0_GFF.gff", header = F, stringsAsFactors = F, comment.char = "#")
+# create a dataframe of protein, gene, and transcript
+gene2tx2protein_Apl <- inner_join(
+# extract transcript to protein mapping
+Apl_GFF %>%
+  filter(V3=="CDS") %>%
+  select(V9) %>%
+  rowwise() %>%
+  mutate(transcript = str_extract(V9,"Parent=rna-[aA-zZ,0-9]*") %>% str_remove(.,"Parent=rna-"),
+         protein = str_extract(V9,"protein_id=[aA-zZ,0-9]*") %>% str_remove(.,"protein_id=")) %>%
+  select(-V9) %>%
+  distinct(),
+# now extract gene to transcript mapping
+Apl_GFF %>%
+  filter(V3=="mRNA") %>%
+  select(V9) %>%
+  rowwise() %>%
+  mutate(gene = str_extract(V9,"Parent=gene-[aA-zZ,0-9]*") %>% str_remove(.,"Parent=gene-"),
+         transcript = str_extract(V9,"transcript_id=[aA-zZ,0-9]*") %>% str_remove(.,"transcript_id="),
+         tx_version=str_extract(V9,"Name=[aA-zZ,0-9,.]*") %>% str_remove(.,"Name=")) %>%
+  select(-V9) %>%
+  distinct()
+)
+```
+
+###### Gene Set Enrichment
+```{r}
+AplysiaKOterms <- read.delim("/Users/school/Documents/Documents/UAB/UAB009/GhostKOALA/user_ko.txt", header = F, col.names = c("protein", "ko")) %>% as.data.frame() %>% mutate(protein = gsub("\\.[0-9]","", protein)) # 26,659 entries
+gene2tx2protein2ko_Apl <- full_join(gene2tx2protein_Apl, AplysiaKOterms, by="protein")
+
+## Age differences
+# AUAL vs MUAL
+gene_list_AgeAL_df <- as.data.frame(gene_list_AgeAL) %>% rownames_to_column("gene") #11,852 genes
+AgeAL_KEGG <- merge(gene_list_AgeAL_df, gene2tx2protein2ko_Apl, by="gene") #17,940 genes
+AgeAL_KEGG2 <- AgeAL_KEGG[!duplicated(AgeAL_KEGG$gene),] #11,422 genes
+df_AgeAL = AgeAL_GO[AgeAL_GO$Gene %in% AgeAL_KEGG2$gene,] #11,422 genes
+df_AgeAL$ko = AgeAL_KEGG2$ko #11,422 genes (just added ko column here)
+AgeAL_keggGeneList <- df_AgeAL$log2FoldChange #11,422 genes (made list of lfc)
+names(AgeAL_keggGeneList) <- df_AgeAL$ko #11,422 genes (named all lfc with ko for that gene)
+AgeAL_keggGeneList <- na.omit(AgeAL_keggGeneList) #11,422 genes (no NA)
+AgeAL_keggGeneList = sort(AgeAL_keggGeneList, decreasing = TRUE) #(sorted the lfc in decreasing order)
+
+kk2_AgeAL <- gseKEGG(geneList = AgeAL_keggGeneList,
+                     organism = "ko", #used ko terms from ghostKOWALA since Aplysia is not and available organism on KEGG website
+                     minGSSize = 3,
+                     maxGSSize = 800,
+                     pvalueCutoff = 0.05,
+                     pAdjustMethod = "none",
+                     keyType = "kegg",
+                     seed = TRUE)
+
+## filter by qvalue less than 0.80
+kk2_AgeAL_filterByQvalue <- kk2_AgeAL %>% filter(qvalue < 0.80)
+
+dotplot(kk2_AgeAL_filterByQvalue, showCategory = 10, title = "Enriched Pathways" , split=".sign") + facet_grid(.~.sign) ## Saved as PDF 6x6 (landscape)
+
+#############################################################################
+## LFI in Mature
+# MTAL vs MUAL
+gene_list_LFIyoungAL_df <- as.data.frame(gene_list_LFIyoungAL) %>% rownames_to_column("gene") #11,852 genes
+LFIyoungAL_KEGG <- merge(gene_list_LFIyoungAL_df, gene2tx2protein2ko_Apl, by="gene") #17,940 genes
+LFIyoungAL_KEGG2 <- LFIyoungAL_KEGG[!duplicated(LFIyoungAL_KEGG$gene),] #11,422 genes
+df_LFIyoungAL = LFIyoungAL_GO[LFIyoungAL_GO$Gene %in% LFIyoungAL_KEGG2$gene,] #11,422 genes
+df_LFIyoungAL$ko = LFIyoungAL_KEGG2$ko #11,422 genes (just added ko column here)
+LFIyoungAL_keggGeneList <- df_LFIyoungAL$log2FoldChange #11,422 genes (made list of lfc)
+names(LFIyoungAL_keggGeneList) <- df_LFIyoungAL$ko #11,422 genes (named all lfc with ko for that gene)
+LFIyoungAL_keggGeneList <- na.omit(LFIyoungAL_keggGeneList) #11,422 genes (no NA)
+LFIyoungAL_keggGeneList = sort(LFIyoungAL_keggGeneList, decreasing = TRUE) #(sorted the lfc in decreasing order)
+
+kk2_LFIyoungAL <- gseKEGG(geneList = LFIyoungAL_keggGeneList,
+                     organism = "ko", #used ko terms from ghostKOWALA since Aplysia is not and available organism on KEGG website
+                     minGSSize = 3,
+                     maxGSSize = 800,
+                     pvalueCutoff = 0.05,
+                     pAdjustMethod = "none",
+                     keyType = "kegg",
+                     seed = TRUE)
+
+## filter by qvalue less than 0.80
+kk2_LFIyoungAL_filterByQvalue <- kk2_LFIyoungAL %>% filter(qvalue < 0.80)
+
+dotplot(kk2_LFIyoungAL_filterByQvalue, showCategory = 10, title = "Enriched Pathways" , split=".sign") + facet_grid(.~.sign) ## Saved as PDF 6x6 (landscape)
+
+#############################################################################
+## LFI in Aged
+# ATAL vs AUAL
+gene_list_LFIagedAL_df <- as.data.frame(gene_list_LFIagedAL) %>% rownames_to_column("gene") #11,852 genes
+LFIagedAL_KEGG <- merge(gene_list_LFIagedAL_df, gene2tx2protein2ko_Apl, by="gene") #17,940 genes
+LFIagedAL_KEGG2 <- LFIagedAL_KEGG[!duplicated(LFIagedAL_KEGG$gene),] #11,422 genes
+df_LFIagedAL = LFIagedAL_GO[LFIagedAL_GO$Gene %in% LFIagedAL_KEGG2$gene,] #11,422 genes
+df_LFIagedAL$ko = LFIagedAL_KEGG2$ko #11,422 genes (just added ko column here)
+LFIagedAL_keggGeneList <- df_LFIagedAL$log2FoldChange #11,422 genes (made list of lfc)
+names(LFIagedAL_keggGeneList) <- df_LFIagedAL$ko #11,422 genes (named all lfc with ko for that gene)
+LFIagedAL_keggGeneList <- na.omit(LFIagedAL_keggGeneList) #11,422 genes (no NA)
+LFIagedAL_keggGeneList = sort(LFIagedAL_keggGeneList, decreasing = TRUE) #(sorted the lfc in decreasing order)
+
+kk2_LFIagedAL <- gseKEGG(geneList = LFIagedAL_keggGeneList,
+                     organism = "ko", #used ko terms from ghostKOWALA since Aplysia is not and available organism on KEGG website
+                     minGSSize = 3,
+                     maxGSSize = 800,
+                     pvalueCutoff = 0.05,
+                     pAdjustMethod = "none",
+                     keyType = "kegg",
+                     seed = TRUE)
+
+## filter by qvalue less than 0.80
+kk2_LFIagedAL_filterByQvalue <- kk2_LFIagedAL %>% filter(qvalue < 0.80)
+
+dotplot(kk2_LFIagedAL_filterByQvalue, showCategory = 10, title = "Enriched Pathways" , split=".sign") + facet_grid(.~.sign) ## Saved as PDF 6x6 (landscape)
+
+#############################################################################
+## Age under CR
+# AUCR vs MUCR
+gene_list_AgeCR_df <- as.data.frame(gene_list_AgeCR) %>% rownames_to_column("gene") #11,852 genes
+AgeCR_KEGG <- merge(gene_list_AgeCR_df, gene2tx2protein2ko_Apl, by="gene") #17,940 genes
+AgeCR_KEGG2 <- AgeCR_KEGG[!duplicated(AgeCR_KEGG$gene),] #11,422 genes
+df_AgeCR = AgeCR_GO[AgeCR_GO$Gene %in% AgeCR_KEGG2$gene,] #11,422 genes
+df_AgeCR$ko = AgeCR_KEGG2$ko #11,422 genes (just added ko column here)
+AgeCR_keggGeneList <- df_AgeCR$log2FoldChange #11,422 genes (made list of lfc)
+names(AgeCR_keggGeneList) <- df_AgeCR$ko #11,422 genes (named all lfc with ko for that gene)
+AgeCR_keggGeneList <- na.omit(AgeCR_keggGeneList) #11,422 genes (no NA)
+AgeCR_keggGeneList = sort(AgeCR_keggGeneList, decreasing = TRUE) #(sorted the lfc in decreasing order)
+
+kk2_AgeCR <- gseKEGG(geneList = AgeCR_keggGeneList,
+                     organism = "ko", #used ko terms from ghostKOWALA since Aplysia is not and available organism on KEGG website
+                     minGSSize = 3,
+                     maxGSSize = 800,
+                     pvalueCutoff = 0.05,
+                     pAdjustMethod = "none",
+                     keyType = "kegg",
+                     seed = TRUE)
+
+## filter by qvalue less than 0.80
+kk2_AgeCR_filterByQvalue <- kk2_AgeCR %>% filter(qvalue < 0.80)
+
+dotplot(kk2_AgeCR_filterByQvalue, showCategory = 10, title = "Enriched Pathways" , split=".sign") + facet_grid(.~.sign) ## Saved as PDF 6x6 (landscape)
+
+#############################################################################
+## LFI in Mature CR
+# MTCR vs MUCR
+gene_list_LFIyoungCR_df <- as.data.frame(gene_list_LFIyoungCR) %>% rownames_to_column("gene") #11,852 genes
+LFIyoungCR_KEGG <- merge(gene_list_LFIyoungCR_df, gene2tx2protein2ko_Apl, by="gene") #17,940 genes
+LFIyoungCR_KEGG2 <- LFIyoungCR_KEGG[!duplicated(LFIyoungCR_KEGG$gene),] #11,422 genes
+df_LFIyoungCR = LFIyoungCR_GO[LFIyoungCR_GO$Gene %in% LFIyoungCR_KEGG2$gene,] #11,422 genes
+df_LFIyoungCR$ko = LFIyoungCR_KEGG2$ko #11,422 genes (just added ko column here)
+LFIyoungCR_keggGeneList <- df_LFIyoungCR$log2FoldChange #11,422 genes (made list of lfc)
+names(LFIyoungCR_keggGeneList) <- df_LFIyoungCR$ko #11,422 genes (named all lfc with ko for that gene)
+LFIyoungCR_keggGeneList <- na.omit(LFIyoungCR_keggGeneList) #11,422 genes (no NA)
+LFIyoungCR_keggGeneList = sort(LFIyoungCR_keggGeneList, decreasing = TRUE) #(sorted the lfc in decreasing order)
+
+kk2_LFIyoungCR <- gseKEGG(geneList = LFIyoungCR_keggGeneList,
+                     organism = "ko", #used ko terms from ghostKOWALA since Aplysia is not and available organism on KEGG website
+                     minGSSize = 3,
+                     maxGSSize = 800,
+                     pvalueCutoff = 0.05,
+                     pAdjustMethod = "none",
+                     keyType = "kegg",
+                     seed = TRUE)
+
+## filter by qvalue less than 0.80
+kk2_LFIyoungCR_filterByQvalue <- kk2_LFIyoungCR %>% filter(qvalue < 0.80)
+
+dotplot(kk2_LFIyoungCR_filterByQvalue, showCategory = 10, title = "Enriched Pathways" , split=".sign") + facet_grid(.~.sign) ## Saved as PDF 6x6 (landscape)
+
+#############################################################################
+## LFI in Aged CR
+# ATCR vs AUCR
+gene_list_LFIageCR_df <- as.data.frame(gene_list_LFIageCR) %>% rownames_to_column("gene") #11,852 genes
+LFIageCR_KEGG <- merge(gene_list_LFIageCR_df, gene2tx2protein2ko_Apl, by="gene") #17,940 genes
+LFIageCR_KEGG2 <- LFIageCR_KEGG[!duplicated(LFIageCR_KEGG$gene),] #11,422 genes
+df_LFIageCR = LFIageCR_GO[LFIageCR_GO$Gene %in% LFIageCR_KEGG2$gene,] #11,422 genes
+df_LFIageCR$ko = LFIageCR_KEGG2$ko #11,422 genes (just added ko column here)
+LFIageCR_keggGeneList <- df_LFIageCR$log2FoldChange #11,422 genes (made list of lfc)
+names(LFIageCR_keggGeneList) <- df_LFIageCR$ko #11,422 genes (named all lfc with ko for that gene)
+LFIageCR_keggGeneList <- na.omit(LFIageCR_keggGeneList) #11,422 genes (no NA)
+LFIageCR_keggGeneList = sort(LFIageCR_keggGeneList, decreasing = TRUE) #(sorted the lfc in decreasing order)
+
+kk2_LFIageCR <- gseKEGG(geneList = LFIageCR_keggGeneList,
+                     organism = "ko", #used ko terms from ghostKOWALA since Aplysia is not and available organism on KEGG website
+                     minGSSize = 3,
+                     maxGSSize = 800,
+                     pvalueCutoff = 0.05,
+                     pAdjustMethod = "none",
+                     keyType = "kegg",
+                     seed = TRUE)
+
+## filter by qvalue less than 0.80
+kk2_LFIageCR_filterByQvalue <- kk2_LFIageCR %>% filter(qvalue < 0.80)
+
+dotplot(kk2_LFIageCR_filterByQvalue, showCategory = 10, title = "Enriched Pathways" , split=".sign") + facet_grid(.~.sign) ## Saved as PDF 6x6 (landscape)
+
+```
+
+###### pathview
+```{r}
+## here I am going to look at some of the pathways a bit closer to see what genes are contributing to them
+## there are 2 in particular that I will be pulling up based on the compare all section below. 
+## Cytoskeleton in muscle cells
+library(pathview)
+
+pathview(as.data.frame(LFIagedAL_keggGeneList, row.names = names(LFIagedAL_keggGeneList)), pathway.id = "04820") # This works now. I have to input all the genes (the geneList) as a dataframe with lfc as a column and the koIDs as rownames. I used the code above to do that
+
+## Neuroactive liagnd-receptor interaction
+pathview(as.data.frame(LFIagedAL_keggGeneList, row.names = names(LFIagedAL_keggGeneList)), pathway.id = "04080")
+
+## That worked fine above but it was only one plot for a comparison
+## I want to try to ploy all 3 LFI comparisons together to see how things change
+## Lets start by making a dataframe with all the koTerms as rownames, comparisons and column names, and lfc as rowData
+test1 <- as.data.frame(LFIagedAL_keggGeneList, row.names = names(LFIagedAL_keggGeneList)) %>% rownames_to_column("ID") %>% filter(ID != "") 
+test2 <- as.data.frame(LFIyoungCR_keggGeneList, row.names = names(LFIyoungCR_keggGeneList)) %>% rownames_to_column("ID") %>% filter(ID != "")
+test3 <- as.data.frame(LFIageCR_keggGeneList, row.names = names(LFIageCR_keggGeneList)) %>% rownames_to_column("ID") %>% filter(ID != "")
+test4 <- full_join(test1,test2, by="ID") %>% full_join(test3, by = "ID") %>%  column_to_rownames("ID")
+# trying to get the above to work to produce one dataframe to plot all data together in the code below. So far i just ran this for each comparison seperatly and compared that way. Notw hat I experceted. LFIageAL show reduction in NPYreceotor while LFIyoung- and agedCR both show increases in NPY and a reduction in NPYreceptor
+pathview(as.data.frame(LFIageCR_keggGeneList, row.names = names(LFIageCR_keggGeneList)), pathway.id = "04080")
+
+as.list(test4)
+
+## I want to do a plotcounts
+## NPY = "LOC100533423"
+## NPY receptor type2 = "LOC101861697"
+plotCounts(dds, gene = "LOC100533423", intgroup = "group")
+## none of this showed much. only one or 2 within a group was up/high so that may not mean what I want it to
+
+#heatplot(kk2_LFIagedAL_filterByQvalue, foldChange=LFIagedAL_keggGeneList, showCategory = 20) # this is not it but kind of cool
+
+
+```
+
+###### Compare together
+```{r}
+#########################################################################
+## I will plot ALL GO terms from all comparisons
+# first make a dataframe with all the GO terms
+AgeAL_KEGGpathways <- as.data.frame(kk2_AgeAL_filterByQvalue)[,c(2,5)] %>% 'rownames<-'(NULL) %>%
+  set_names(c("KEGG.pathway", "AgeAL_NES"))
+LFIyoungAL_KEGGpathways <- as.data.frame(kk2_LFIyoungAL_filterByQvalue)[,c(2,5)] %>% 'rownames<-'(NULL) %>%
+  set_names(c("KEGG.pathway", "LFIyoungAL_NES"))
+LFIagedAL_KEGGpathways <- as.data.frame(kk2_LFIagedAL_filterByQvalue)[,c(2,5)] %>% 'rownames<-'(NULL) %>%
+  set_names(c("KEGG.pathway", "LFIagedAL_NES"))
+AgeCR_KEGGpathways <- as.data.frame(kk2_AgeCR_filterByQvalue)[,c(2,5)] %>% 'rownames<-'(NULL) %>%
+  set_names(c("KEGG.pathway", "AgeCR_NES"))
+LFIyoungCR_KEGGpathways <- as.data.frame(kk2_LFIyoungCR_filterByQvalue)[,c(2,5)] %>% 'rownames<-'(NULL) %>%
+  set_names(c("KEGG.pathway", "LFIyoungCR_NES"))
+LFIageCR_KEGGpathways <- as.data.frame(kk2_LFIageCR_filterByQvalue)[,c(2,5)] %>% 'rownames<-'(NULL) %>%
+  set_names(c("KEGG.pathway", "LFIageCR_NES"))
+
+listInputs_3 <- list("AgeAL_KEGGpathways" = AgeAL_KEGGpathways$KEGG.pathway,
+                   "LFIyoungAL_KEGGpathways" = LFIyoungAL_KEGGpathways$KEGG.pathway,
+                   "LFIagedAL_KEGGpathways" = LFIagedAL_KEGGpathways$KEGG.pathway,
+                   "AgeCR_KEGGpathways" = AgeCR_KEGGpathways$KEGG.pathway,
+                   "LFIyoungCR_KEGGpathways" = LFIyoungCR_KEGGpathways$KEGG.pathway,
+                   "LFIageCR_KEGGpathways" = LFIageCR_KEGGpathways$KEGG.pathway)
+upset(fromList(listInputs_3), sets=c("AgeAL_KEGGpathways", "LFIyoungAL_KEGGpathways", "LFIagedAL_KEGGpathways", "AgeCR_KEGGpathways", "LFIyoungCR_KEGGpathways", "LFIageCR_KEGGpathways"), order.by = "degree")
+
+AllKEGGpathways <- full_join(AgeAL_KEGGpathways, LFIyoungAL_KEGGpathways, by = "KEGG.pathway")
+AllKEGGpathways <- full_join(AllKEGGpathways, LFIagedAL_KEGGpathways, by = "KEGG.pathway")
+AllKEGGpathways <- full_join(AllKEGGpathways, AgeCR_KEGGpathways, by = "KEGG.pathway")
+AllKEGGpathways <- full_join(AllKEGGpathways, LFIyoungCR_KEGGpathways, by = "KEGG.pathway")
+AllKEGGpathways <- full_join(AllKEGGpathways, LFIageCR_KEGGpathways, by = "KEGG.pathway")
+
+# write.xlsx(AllKEGGpathways,"/Users/school/Documents/UAB/UAB009/Results/AllFunctionalAnalyses.xlsx", sheetName = "All_KEGGs", append = T, row.names = F) # 176 KEGG pathways
+
+## below I have graphed the top 5 signifiant KEGG pathwyas in each comparison together to compare
+mlist3 <- list(kk2_AgeAL_filterByQvalue, kk2_AgeCR_filterByQvalue, kk2_LFIagedAL_filterByQvalue, kk2_LFIageCR_filterByQvalue, kk2_LFIyoungCR_filterByQvalue)
+names(mlist3)<-c("Age AL", "Age CR", "LFI aged AL", "LFI aged CR", "LFI young CR")
+mresults3<-merge_result(mlist3)
+dotplot(mresults3, showCategory=5, split=".sign", includeAll=T) + 
+  facet_grid(.~.sign) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  xlab("")
+```
+
