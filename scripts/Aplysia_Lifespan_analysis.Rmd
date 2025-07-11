@@ -1,0 +1,333 @@
+---
+title: "Lifespan_analysis_Rachel"
+author: "Nicole Riddle"
+date: "2023-06-13"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R script to analyze Rachel's PCL data
+
+We need to analyze Rachel's PCL block. This script will serve as template to analyze all other knockdown plots as well. 
+
+# Setting things up
+```{r}
+# Cleaning up
+rm(list=ls())
+install.packages("here")
+install.packages('hrbrthemes')
+install.packages("survminer")
+
+
+# Loading libraries
+library(here)
+library(ggplot2)
+library(tidyverse)
+library(hrbrthemes)
+library(viridis)
+library(readxl)
+library(survival)
+library(survminer)
+library(xlsx)
+```
+
+# Loading the data
+```{r}
+# Reading in the file
+Aplysia_lifespan_data <- read.xlsx("/Users/school/Documents/Documents/UAB/UAB009/KapplinMyerPlots/Aplysia_deaths.xlsx", sheetIndex = "DeathData4R")
+
+# Defining factors for analysis
+#Aplysia_lifespan_data$vial_no <- as.factor(Aplysia_lifespan_data$vial_no)
+#Aplysia_lifespan_data$sex <- as.factor(Aplysia_lifespan_data$sex)
+Aplysia_lifespan_data$Diet <- as.factor(Aplysia_lifespan_data$Diet)
+
+```
+
+# Data cleaning
+We want to run just a few checks to make sure that the data look the way we expect. 
+```{r}
+
+summary(Aplysia_lifespan_data)
+
+# At a quick glance this summary looks good. We have 200 animals for each of the three genotypes, 300 are female, 300 are male. 
+
+#if (length(levels(PCL_lifespan_data$sex)) != 2) {print("Sex is miscoded - there are more than the two expected categories.")}
+
+if (length(levels(Aplysia_lifespan_data$Diet)) != 3) {print("Genotype is miscoded - there should be three categories.")}
+
+#if (length(levels(PCL_lifespan_data$vial_no)) != 60) {print("There might be someting wrong with the vial numbers - there should be 60 vials in this experiment.")}
+
+#if (min(PCL_lifespan_data$birthday) < 0) {print ("There might be a problem with the recorded birth days - some of them are negative numbers.")}
+
+if (min(Aplysia_lifespan_data$deathday) < 0) {print ("There might be a problem with the recorded age at death - some of them are negative numbers.")}
+
+#if (min(PCL_lifespan_data$adjusted) < 0) {print ("There might be a problem with the adjusted age of death - some of them are negative numbers.")}
+
+# Checking if the adjusted age at death ("adjusted") matches deathday-birthday:
+# if (all((PCL_lifespan_data$deathday - PCL_lifespan_data$birthday) == PCL_lifespan_data$adjusted)) {
+#   print("The calculated adjusted time to death matches that listed in the adjusted variable.")
+# } else {
+#   print("The calculated adjusted time to death does not match that listed in the adjusted variable.")
+# }
+
+# Checking how many data entries are censored.
+#x <- nrow(subset(PCL_lifespan_data, censor_reason == 0))
+#print (paste ("Note, of 600 data entries,", x, "are being censored."))
+
+# Checking if the censored data are biased towards a specific group.
+#summary (subset(PCL_lifespan_data, censor_reason == 0))
+
+# Distribution between genotypes looks ok, but we lost three times as many males and females. To see if that is significant, we could run a hypergeometric test. 
+
+# If any of the checks above reveal a problem, you need to check the datafile, and correct any problemss.  Then, run these checks again until the file passes our QC checks. 
+
+```
+# Looking at the data
+Only proceed to this step if you have a datafile that passes the QC checks.
+```{r}
+
+# Removing censored data to generate the dataset we will use
+#PCL_lifespan_data <- subset(PCL_lifespan_data, censor_reason == 1)
+
+#summary(PCL_lifespan_data)
+
+# Plot - combined sexes
+Aplysia_lifespan_data %>%
+  ggplot( aes(x=Diet, y=deathday)) +
+    geom_boxplot() +
+    scale_fill_viridis(discrete = TRUE, alpha=0.6) +
+    geom_jitter(color="black", size=0.4, alpha=0.9) +
+    theme_ipsum() +
+    theme(
+      legend.position="none",
+      plot.title = element_text(size=11)
+    ) +
+    ggtitle("PC boxplot") +
+    xlab("")
+
+
+# Plot - separated by sex
+# PCL_lifespan_data %>%
+#   ggplot( aes(x=genotype, y=deathday, color=sex)) +
+#     geom_boxplot(outlier.shape = NA) +
+#     scale_fill_viridis(discrete = TRUE, alpha=0.6) +
+#     geom_jitter(position = position_jitterdodge()  ) +
+#     theme_ipsum() +
+#     theme(
+#       legend.position="right",
+#       plot.title = element_text(size=11)
+#     ) +
+#     ggtitle("PC boxplot") +
+#     xlab("")
+
+```
+I think these boxplots look pretty reasonable, and I don't see any obvious flags in terms of problems with the data.  I think we can go ahead and run some analyses. 
+
+# Basic stats
+```{r}
+# Normality test
+shapiro.test(Aplysia_lifespan_data$deathday)
+
+# Data not normal
+
+kruskal.test(deathday~Diet, data = Aplysia_lifespan_data)
+#kruskal.test(deathday~genotype, data = PCL_lifespan_data)
+
+# Vial number is nested within sex and genotype, so disregard. 
+# kruskal.test(adjusted~vial_no, data = PCL_lifespan_data)
+
+# Given our large sample size, I'll run the ANOVA despite the normality issue
+summary(aov(deathday~Diet, data = Aplysia_lifespan_data))
+TukeyHSD(aov(deathday~Diet, data = Aplysia_lifespan_data))
+
+
+```
+So far, so good. Next step, survival analysis. 
+
+# Survival analysis
+```{r}
+data.surv<-survfit(Surv(deathday)~Diet, conf.type="none", data=Aplysia_lifespan_data, type = "kaplan-meier")
+
+plot(data.surv,main="Longevity-all", xlab="Time [days]", 
+     ylab="Survival probability", lwd=2, 
+     col=c("blue", "green"))
+
+legend(x="topright", col=c("blue", "green"), 
+       lwd=2, legend=c("AL", "CR"))
+
+ggsurvplot(survfit(Surv(deathday) ~ Diet, data = Aplysia_lifespan_data))
+
+survdiff(formula = Surv(deathday) ~ Diet, data = Aplysia_lifespan_data, rho = 0)
+```
+Now, I want to do that separately for the males and females. Should not be nesecarry as these are hermaphrodites
+
+```{r}
+# block_F <- subset(PCL_lifespan_data, sex == "F")
+# block_M <- subset(PCL_lifespan_data, sex == "M")
+
+# data.surv.F<-survfit(Surv(deathday)~genotype, conf.type="none", data=block_F, type = "kaplan-meier")
+# 
+# data.surv.M<-survfit(Surv(deathday)~genotype, conf.type="none", data=block_M, type = "kaplan-meier")
+
+# plot1 <- ggsurvplot(surv_fit(Surv(deathday) ~ genotype,
+#                     data = PCL_lifespan_data),
+#                     ggtheme = theme_bw(),
+#                     facet.by = "sex",
+#                     xlab ="Time (Days)")
+# plot1
+
+# plot2 <- ggsurvplot(survfit(Surv(deathday) ~ genotype, data = block_F),
+#            xlim = c(0, 110),
+#            break.x.by = 10,
+#            ylim = c(0,1.00),
+#            break.y.by =.10,
+#            ggtheme = theme_bw())
+# plot2
+# plot3<-ggsurvplot(survfit(Surv(deathday) ~ genotype, data = block_M), xlim = c(0, 110),
+#            break.x.by = 10,
+#            ylim = c(0,1.00),
+#            break.y.by =.10,
+#            ggtheme = theme_bw())
+# plot3
+# survdiff(formula = Surv(deathday) ~ genotype, data = block_F, rho = 0)
+# 
+# survdiff(formula = Surv(deathday) ~ genotype, data = block_M, rho = 0)
+# 
+# survdiff(formula = Surv(deathday) ~ genotype, data = block_F, subset = (genotype == "SUZ12" | genotype == "CROSS"), rho = 0)
+# survdiff(formula = Surv(deathday) ~ genotype, data = block_F, subset = (genotype == "CNS" | genotype == "CROSS"), rho = 0)
+# survdiff(formula = Surv(deathday) ~ genotype, data = block_M, subset = (genotype == "SUZ12" | genotype == "CROSS"), rho = 0)
+# survdiff(formula = Surv(deathday) ~ genotype, data = block_M, subset = (genotype == "CNS" | genotype == "CROSS"), rho = 0)
+
+
+
+# Fit Kaplan-Meier survival curves
+fit <- survfit(Surv(deathday) ~ Diet, data = Aplysia_lifespan_data)
+summary_fit <- summary(fit)
+# Example: Extracting survival probabilities and times for each genotype
+survival_data <- summary_fit
+
+summary_fit$strata
+
+# This will give you the survival probabilities (surv) and time points (time) for each genotype
+survival_data$time   # Time points for each genotype
+survival_data$surv   # Survival probabilities for each genotype
+
+
+# Target survival probability
+target_survival <- 0.80
+
+# Initialize a list to store times for each genotype
+time_at_80_percent <- list()
+
+# Iterate over each genotype
+for (PCL in names(summary_fit$strata)) {
+  
+  # Get the indices of the times and survival probabilities for the current genotype
+  genotype_indices <- which(summary_fit$strata == PCL)
+  
+  # Extract the time and survival values for this genotype
+  genotype_times <- summary_fit$time[genotype_indices]
+  genotype_surv <- summary_fit$surv[genotype_indices]
+  
+  # Find the time closest to 80% survival for this genotype
+  closest_time_idx <- which.min(abs(genotype_surv - target_survival))
+  time_at_80_percent[[PCL]] <- genotype_times[closest_time_idx]
+}
+
+# Print the times
+print(time_at_80_percent)
+
+
+```
+
+```{r}
+PLOT3<-pdf(file = "~/Desktop/SUZ12.pdf", width = 10, height = 5)
+plot2
+dev.off()
+```
+
+
+
+## _________________________________________________
+# New/My Stuff
+```{r}
+# here I am fitting my data to the survival surve with this tutorial
+# https://www.sthda.com/english/wiki/survminer-r-package-survival-data-analysis-and-visualization
+#install.packages("survminer")
+# library(survival)
+# library(survminer)
+# 
+# # Create the variable sex 2
+# data("lung")
+# lung$sex2 <- factor(lung$sex, levels = c(2, 1))
+# 
+# # Fit survival curves for the variable sex
+# fit1<- survfit(Surv(time, status) ~ sex, data = lung)
+# ggsurvplot(fit1, risk.table = TRUE)
+
+
+
+library(dplyr)
+
+library("survival")
+library(broom)
+
+library(xlsx)
+Aplysia_lifespan_data <- read.xlsx("/Users/school/Documents/Documents/UAB/UAB009/KapplinMyerPlots/Aplysia_deaths.xlsx", sheetIndex = "DeathData4R")
+ApDeaths <- Aplysia_lifespan_data[,c(1:6)]
+ApDeaths$Diet <- factor(ApDeaths$Diet, levels = c("AL","CR"))
+# ApDeaths$n <- as.integer(ApDeaths$n)
+# ApDeaths$Age <- as.integer(ApDeaths$Age)
+
+# had to manually go to my dataframe and include "status" as there is a very specific way to notate a death or no change using 1 and 0.5 respectively
+
+fit2 <- survfit(Surv(time = Age, event = status) ~ Diet, data = ApDeaths, type = "kaplan-meier")
+tidy(fit2)
+summary(fit2)
+
+library(survminer)
+test <- ggsurvplot(fit2, 
+           risk.table = F, 
+           tables.height = 0.2, 
+           tables.theme = theme_cleantable(),
+           pval = T,
+           surv.median.line = "hv",
+           ggtheme = theme_classic(),
+           legend.title="Diet",
+           legend.labs = c("AL","CR"),
+           linetype = c("solid", "dashed"),
+           xlab = "Age (days)",
+           font.x = c(14, "bold", "black"),
+           font.y = c(14, "bold", "black"),
+           font.tickslab = c(12,"plain","black"),
+           surv.scale = "percent",
+           palette = c("black", "gray58"), conf.int = F)
+
+test2 <- test$plot +
+  scale_x_continuous(expand = c(0,0,0.05,0)) +
+  scale_y_continuous(expand = c(0,0,0.05,0), labels=scales::label_percent())
+
+
+## below did not work to shade the months, or it did but it looked bad so I will not use it
+# test2 + xlim(175, NA) +
+#   annotate("rect", xmin = 181, xmax = 212, ymin = 0, ymax = 1.07, 
+#            alpha = .3) + # This will give me the boxes
+#   annotate("rect", xmin = 242, xmax = 273, ymin = 0, ymax = 1.07, 
+#            alpha = .3) +
+#   annotate("rect", xmin = 303, xmax = 334, ymin = 0, ymax = 1.07, 
+#            alpha = .3)+
+#   annotate("rect", xmin = 365, xmax = 394, ymin = 0, ymax = 1.07, 
+#            alpha = .3) +
+#   annotate(geom = "text", x = 197, y = 1.035, label="Month 6")+
+#   annotate(geom = "text", x = 227, y = 1.035, label="Month 7")+
+#   annotate(geom = "text", x = 258, y = 1.035, label="Month 8")+
+#   annotate(geom = "text", x = 288, y = 1.035, label="Month 9")+
+#   annotate(geom = "text", x = 318, y = 1.035, label="Month 10")+
+#   annotate(geom = "text", x = 350, y = 1.035, label="Month 11")+
+#   annotate(geom = "text", x = 379, y = 1.035, label="Month 12")
+
+```
+
