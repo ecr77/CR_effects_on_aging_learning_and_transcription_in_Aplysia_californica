@@ -34,7 +34,7 @@ packageVersion("dbplyr")
 
 ## first will need to run the below code so that you do not encounter a connection problem with Ensemble then the AnnotationForge should work well
 httr::set_config(httr::config(ssl_verifypeer = FALSE))
-## Species: Plodia interpunctella
+## Species: Aplysia californica
 makeOrgPackageFromNCBI(version = "0.1",
                        author = "EC Randolph <erandolp@uab.edu>",
                        maintainer = "EC Randolph <erandolp@uab.edu>",
