@@ -1,27 +1,11 @@
 ---
-title: "Lifespan_analysis_Rachel"
-author: "Nicole Riddle"
-date: "2023-06-13"
+title: "Lifespan_analysis_Aplysia"
+author: "Eric C Randolph"
+date: "2025-06-13"
 output: pdf_document
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-```
-
-## R script to analyze Rachel's PCL data
-
-We need to analyze Rachel's PCL block. This script will serve as template to analyze all other knockdown plots as well. 
-
-# Setting things up
 ```{r}
-# Cleaning up
-rm(list=ls())
-install.packages("here")
-install.packages('hrbrthemes')
-install.packages("survminer")
-
-
 # Loading libraries
 library(here)
 library(ggplot2)
