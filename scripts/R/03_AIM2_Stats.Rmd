@@ -1,0 +1,1010 @@
+---
+title: "AIM 2 Stats"
+output: html_document
+date: "2022-09-07"
+---
+
+## Test for Normality with Shapiro Test
+#### TTIM data
+```{r }
+library(xlsx)
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "AL_TTIM_M")
+shapiro.test(data$TTIM)
+```
+
+```{r }
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "AL_TTIM_A")
+shapiro.test(data$TTIM)
+```
+
+```{r }
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "Day1TTIM_AL")
+shapiro.test(data$TTIM)
+```
+
+```{r }
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "Day2TTIM_AL")
+shapiro.test(data$TTIM)
+```
+
+```{r }
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "CR_TTIM_M")
+shapiro.test(data$TTIM)
+```
+
+```{r }
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "CR_TTIM_A")
+shapiro.test(data$TTIM)
+```
+
+```{r }
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "Day1TTIM_CR")
+shapiro.test(data$TTIM)
+```
+
+```{r }
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "Day2TTIM_CR")
+shapiro.test(data$TTIM)
+```
+
+```{r }
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "Day1TTIM")
+shapiro.test(data$TTIM)
+```
+
+```{r }
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "Day2TTIM")
+shapiro.test(data$TTIM)
+```
+#### %SAV data
+```{r, %SAV}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "P_SAV")
+
+shapiro.test(data$P_SAV)
+
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "AL_P_SAV")
+shapiro.test(data$P_SAV)
+
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "CR_P_SAV")
+shapiro.test(data$P_SAV)
+
+```
+
+#### TET data
+```{r }
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "TET_AL_M")
+shapiro.test(data$TET)
+```
+
+```{r }
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "TET_AL_A")
+shapiro.test(data$TET)
+```
+
+```{r }
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "TET_Day1_AL")
+shapiro.test(data$TET)
+```
+
+```{r }
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "TET_Day2_AL")
+shapiro.test(data$TET)
+```
+
+```{r }
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "TET_CR_M")
+shapiro.test(data$TET)
+```
+
+```{r }
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "TET_CR_A")
+shapiro.test(data$TET)
+```
+
+```{r }
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "TET_Day1_CR")
+shapiro.test(data$TET)
+```
+
+```{r }
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "TET_Day2_CR")
+shapiro.test(data$TET)
+```
+
+
+## Stats Test
+### AL %SAV
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "AL_P_SAV")
+
+t.test(data$P_SAV ~ data$Age)
+```
+
+### CR %SAV
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "CR_P_SAV")
+
+t.test(data$P_SAV ~ data$Age)
+```
+
+
+## Stats Test
+### AL TTIM M
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "AL_TTIM_M")
+
+library(dplyr)
+group_by(data,Day) %>%
+  summarise(
+    count = n(),
+    median = median(TTIM, na.rm = TRUE),
+    IQR = IQR(TTIM, na.rm = TRUE))
+ 
+# loading package for boxplot
+library(ggpubr)
+ggboxplot(data, x = "Day", y = "TTIM",
+          color = "Day", palette = c("#FFA500", "#FF0000"),
+          ylab = "TTIM", xlab = "Day")
+ 
+
+# res <- t.test(data$TTIM[data$Day==1], data$TTIM[data$Day==2], paired = T)
+# 
+# res
+
+## NEW STATS
+res <- wilcox.test(TTIM ~ Day,
+                   data = data,
+                   paired = TRUE)
+res
+```
+### AL TTIM A
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "AL_TTIM_A")
+
+
+group_by(data,Day) %>%
+  summarise(
+    count = n(),
+    median = median(TTIM, na.rm = TRUE),
+    IQR = IQR(TTIM, na.rm = TRUE))
+ 
+# loading package for boxplot
+ggboxplot(data, x = "Day", y = "TTIM",
+          color = "Day", palette = c("#FFA500", "#FF0000"),
+          ylab = "TTIM", xlab = "Day")
+
+# res <- wilcox.test(TTIM ~ Day,
+#                    data = data,
+#                    exact = FALSE)
+# res
+
+## NEW STATS
+res <- wilcox.test(TTIM ~ Day,
+                   data = data,
+                   paired = TRUE)
+res
+```
+### AL TTIM Day 1
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "Day1TTIM_AL")
+
+
+group_by(data,Age) %>%
+  summarise(
+    count = n(),
+    median = median(TTIM, na.rm = TRUE),
+    IQR = IQR(TTIM, na.rm = TRUE))
+ 
+# loading package for boxplot
+ggboxplot(data, x = "Age", y = "TTIM",
+          color = "Age", palette = c("#FFA500", "#FF0000"),
+          ylab = "TTIM", xlab = "Age")
+
+res <- wilcox.test(TTIM ~ Age,
+                   data = data,
+                   exact = FALSE)
+res
+```
+### AL TTIM Day 2
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "Day2TTIM_AL")
+
+
+group_by(data,Age) %>%
+  summarise(
+    count = n(),
+    median = median(TTIM, na.rm = TRUE),
+    IQR = IQR(TTIM, na.rm = TRUE))
+ 
+# loading package for boxplot
+ggboxplot(data, x = "Age", y = "TTIM",
+          color = "Age", palette = c("#FFA500", "#FF0000"),
+          ylab = "TTIM", xlab = "Age")
+
+res <- wilcox.test(TTIM ~ Age,
+                   data = data,
+                   exact = FALSE)
+res
+```
+### CR TTIM M
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "CR_TTIM_M")
+
+
+group_by(data,Day) %>%
+  summarise(
+    count = n(),
+    median = median(TTIM, na.rm = TRUE),
+    IQR = IQR(TTIM, na.rm = TRUE))
+ 
+# loading package for boxplot
+ggboxplot(data, x = "Day", y = "TTIM",
+          color = "Day", palette = c("#FFA500", "#FF0000"),
+          ylab = "TTIM", xlab = "Day")
+
+# res <- t.test(data$TTIM[data$Day==1], data$TTIM[data$Day==2], paired = T)
+# 
+# res
+
+## NEW STATS
+res <- wilcox.test(TTIM ~ Day,
+                   data = data,
+                   paired = TRUE)
+res
+```
+### CR TTIM A
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "CR_TTIM_A")
+
+
+group_by(data,Day) %>%
+  summarise(
+    count = n(),
+    median = median(TTIM, na.rm = TRUE),
+    IQR = IQR(TTIM, na.rm = TRUE))
+ 
+# loading package for boxplot
+ggboxplot(data, x = "Day", y = "TTIM",
+          color = "Day", palette = c("#FFA500", "#FF0000"),
+          ylab = "TTIM", xlab = "Day")
+
+# res <- t.test(data$TTIM[data$Day==1], data$TTIM[data$Day==2], paired = T)
+# 
+# res
+
+## NEW STATS
+res <- wilcox.test(TTIM ~ Day,
+                   data = data,
+                   paired = TRUE)
+res
+```
+
+### CR TTIM Day 1
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "Day1TTIM_CR")
+
+
+group_by(data,Age) %>%
+  summarise(
+    count = n(),
+    median = median(TTIM, na.rm = TRUE),
+    IQR = IQR(TTIM, na.rm = TRUE))
+ 
+# loading package for boxplot
+ggboxplot(data, x = "Age", y = "TTIM",
+          color = "Age", palette = c("#FFA500", "#FF0000"),
+          ylab = "TTIM", xlab = "Age")
+
+# res <- t.test(data$TTIM[data$Age=="M"], data$TTIM[data$Age=="A"], paired = T)
+# 
+# res
+
+## New Test
+res <- wilcox.test(TTIM ~ Age,
+                   data = data,
+                   exact = FALSE)
+res
+```
+### CR TTIM Day 2
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "Day2TTIM_CR")
+
+
+group_by(data,Age) %>%
+  summarise(
+    count = n(),
+    median = median(TTIM, na.rm = TRUE),
+    IQR = IQR(TTIM, na.rm = TRUE))
+ 
+# loading package for boxplot
+ggboxplot(data, x = "Age", y = "TTIM",
+          color = "Age", palette = c("#FFA500", "#FF0000"),
+          ylab = "TTIM", xlab = "Age")
+
+# res <- t.test(data$TTIM[data$Age=="M"], data$TTIM[data$Age=="A"], paired = T)
+# 
+# res
+
+## New Test
+res <- wilcox.test(TTIM ~ Age,
+                   data = data,
+                   exact = FALSE)
+res
+```
+
+# Stats Test
+### AL Bites M
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "AL_Bites_M")
+
+group_by(data,Day) %>%
+  summarise(
+    count = n(),
+    median = median(Bites, na.rm = TRUE),
+    IQR = IQR(Bites, na.rm = TRUE))
+ 
+# loading package for boxplot
+ggboxplot(data, x = "Day", y = "Bites",
+          color = "Day", palette = c("#FFA500", "#FF0000"),
+          ylab = "Bites", xlab = "Day")
+ 
+
+# res <- t.test(data$TTIM[data$Day==1], data$TTIM[data$Day==2], paired = T)
+# 
+# res
+
+## NEW STATS
+res <- wilcox.test(Bites ~ Day,
+                   data = data,
+                   paired = TRUE)
+res
+
+#chisq.test(data$Bites, data$Day, correct = F) <- Not the correct test!!
+```
+
+### AL Bites A
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "AL_Bites_A")
+
+group_by(data,Day) %>%
+  summarise(
+    count = n(),
+    median = median(Bites, na.rm = TRUE),
+    IQR = IQR(Bites, na.rm = TRUE))
+ 
+# loading package for boxplot
+ggboxplot(data, x = "Day", y = "Bites",
+          color = "Day", palette = c("#FFA500", "#FF0000"),
+          ylab = "Bites", xlab = "Day")
+ 
+
+# res <- t.test(data$TTIM[data$Day==1], data$TTIM[data$Day==2], paired = T)
+# 
+# res
+
+## NEW STATS
+res <- wilcox.test(Bites ~ Day,
+                   data = data,
+                   paired = TRUE)
+res
+```
+
+### AL Bites Day 1
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "Day1Bites_AL")
+
+group_by(data,Age) %>%
+  summarise(
+    count = n(),
+    median = median(Bites, na.rm = TRUE),
+    IQR = IQR(Bites, na.rm = TRUE))
+ 
+# loading package for boxplot
+ggboxplot(data, x = "Age", y = "Bites",
+          color = "Age", palette = c("#FFA500", "#FF0000"),
+          ylab = "Bites", xlab = "Age")
+ 
+
+# res <- t.test(data$TTIM[data$Day==1], data$TTIM[data$Day==2], paired = T)
+# 
+# res
+
+## NEW STATS
+res <- wilcox.test(Bites ~ Age,
+                   data = data,
+                   exact = FALSE)
+res
+```
+
+### AL Bites Day 2
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "Day2Bites_AL")
+
+group_by(data,Age) %>%
+  summarise(
+    count = n(),
+    median = median(Bites, na.rm = TRUE),
+    IQR = IQR(Bites, na.rm = TRUE))
+ 
+# loading package for boxplot
+ggboxplot(data, x = "Age", y = "Bites",
+          color = "Age", palette = c("#FFA500", "#FF0000"),
+          ylab = "Bites", xlab = "Age")
+ 
+
+# res <- t.test(data$TTIM[data$Day==1], data$TTIM[data$Day==2], paired = T)
+# 
+# res
+
+## NEW STATS
+res <- wilcox.test(Bites ~ Age,
+                   data = data,
+                   exact = FALSE)
+res
+```
+
+### CR Bites M
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "CR_Bites_M")
+
+group_by(data,Day) %>%
+  summarise(
+    count = n(),
+    median = median(Bites, na.rm = TRUE),
+    IQR = IQR(Bites, na.rm = TRUE))
+ 
+# loading package for boxplot
+ggboxplot(data, x = "Day", y = "Bites",
+          color = "Day", palette = c("#FFA500", "#FF0000"),
+          ylab = "Bites", xlab = "Day")
+ 
+
+# res <- t.test(data$TTIM[data$Day==1], data$TTIM[data$Day==2], paired = T)
+# 
+# res
+
+## NEW STATS
+res <- wilcox.test(Bites ~ Day,
+                   data = data,
+                   paired = TRUE)
+res
+```
+
+### CR Bites A
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "CR_Bites_A")
+
+group_by(data,Day) %>%
+  summarise(
+    count = n(),
+    median = median(Bites, na.rm = TRUE),
+    IQR = IQR(Bites, na.rm = TRUE))
+ 
+# loading package for boxplot
+ggboxplot(data, x = "Day", y = "Bites",
+          color = "Day", palette = c("#FFA500", "#FF0000"),
+          ylab = "Bites", xlab = "Day")
+ 
+
+# res <- t.test(data$TTIM[data$Day==1], data$TTIM[data$Day==2], paired = T)
+# 
+# res
+
+## NEW STATS
+res <- wilcox.test(Bites ~ Day,
+                   data = data,
+                   paired = TRUE)
+res
+```
+
+### CR Bites Day 1
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "Day1Bites_CR")
+
+group_by(data,Age) %>%
+  summarise(
+    count = n(),
+    median = median(Bites, na.rm = TRUE),
+    IQR = IQR(Bites, na.rm = TRUE))
+ 
+# loading package for boxplot
+ggboxplot(data, x = "Age", y = "Bites",
+          color = "Age", palette = c("#FFA500", "#FF0000"),
+          ylab = "Bites", xlab = "Age")
+ 
+
+# res <- t.test(data$TTIM[data$Day==1], data$TTIM[data$Day==2], paired = T)
+# 
+# res
+
+## NEW STATS
+res <- wilcox.test(Bites ~ Age,
+                   data = data,
+                   exact = FALSE)
+res
+```
+
+### CR Bites Day 2
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "Day2Bites_CR")
+
+group_by(data,Age) %>%
+  summarise(
+    count = n(),
+    median = median(Bites, na.rm = TRUE),
+    IQR = IQR(Bites, na.rm = TRUE))
+ 
+# loading package for boxplot
+ggboxplot(data, x = "Age", y = "Bites",
+          color = "Age", palette = c("#FFA500", "#FF0000"),
+          ylab = "Bites", xlab = "Age")
+ 
+
+# res <- t.test(data$TTIM[data$Day==1], data$TTIM[data$Day==2], paired = T)
+# 
+# res
+
+## NEW STATS
+res <- wilcox.test(Bites ~ Age,
+                   data = data,
+                   exact = FALSE)
+res
+```
+
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "Day1TTIM")
+
+
+group_by(data,group) %>%
+  summarise(
+    count = n(),
+    median = median(TTIM, na.rm = TRUE),
+    IQR = IQR(TTIM, na.rm = TRUE))
+ 
+# loading package for boxplot
+ggboxplot(data, x = "group", y = "TTIM",
+          color = "group", palette = c("#FFA500", "#FF0000", "#FF9999", "#FF9900"),
+          ylab = "TTIM", xlab = "group")
+
+kruskal.test(TTIM ~ group,
+             data = data)
+
+## There are significant differences between Months. Next is a post hoc test
+
+PH <- dunnTest(TTIM ~ group,
+               data=data,
+               method = "bh")
+
+PH
+```
+
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "Day2TTIM")
+
+
+group_by(data,group) %>%
+  summarise(
+    count = n(),
+    median = median(TTIM, na.rm = TRUE),
+    IQR = IQR(TTIM, na.rm = TRUE))
+ 
+# loading package for boxplot
+ggboxplot(data, x = "group", y = "TTIM",
+          color = "group", palette = c("#FFA500", "#FF0000", "#FF9999", "#FF9900"),
+          ylab = "TTIM", xlab = "group")
+
+one.way <- aov(TTIM ~ group, 
+    data = data)
+summary(one.way)
+
+TukeyHSD(one.way)
+```
+
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "P_SAV")
+
+
+group_by(data,group) %>%
+  summarise(
+    count = n(),
+    median = median(P_SAV, na.rm = TRUE),
+    IQR = IQR(P_SAV, na.rm = TRUE))
+ 
+# loading package for boxplot
+ggboxplot(data, x = "group", y = "P_SAV",
+          color = "group", palette = c("#FFA500", "#FF0000", "#FF9999", "#FF9900"),
+          ylab = "P_SAV", xlab = "group")
+
+one.way <- aov(P_SAV ~ group, 
+    data = data)
+summary(one.way)
+
+TukeyHSD(one.way)
+
+
+
+kruskal.test(P_SAV ~ group,
+             data = data)
+
+## There are significant differences between Months. Next is a post hoc test
+
+PH <- dunnTest(P_SAV ~ group,
+               data=data,
+               method = "bh")
+
+PH
+```
+
+## Stats Test
+### AL TET M
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "TET_AL_M")
+
+
+group_by(data,Day) %>%
+  summarise(
+    count = n(),
+    median = median(TET, na.rm = TRUE),
+    IQR = IQR(TET, na.rm = TRUE))
+ 
+# loading package for boxplot
+ggboxplot(data, x = "Day", y = "TET",
+          color = "Day", palette = c("#FFA500", "#FF0000"),
+          ylab = "TET", xlab = "Day")
+ 
+
+# res <- t.test(data$TTIM[data$Day==1], data$TTIM[data$Day==2], paired = T)
+# 
+# res
+
+## NEW STATS
+res <- wilcox.test(TET ~ Day,
+                   data = data,
+                   paired = TRUE)
+res
+```
+
+### AL TET A
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "TET_AL_A")
+
+
+group_by(data,Day) %>%
+  summarise(
+    count = n(),
+    median = median(TET, na.rm = TRUE),
+    IQR = IQR(TET, na.rm = TRUE))
+ 
+# loading package for boxplot
+ggboxplot(data, x = "Day", y = "TET",
+          color = "Day", palette = c("#FFA500", "#FF0000"),
+          ylab = "TET", xlab = "Day")
+ 
+
+# res <- t.test(data$TTIM[data$Day==1], data$TTIM[data$Day==2], paired = T)
+# 
+# res
+
+## NEW STATS
+res <- wilcox.test(TET ~ Day,
+                   data = data,
+                   paired = TRUE)
+res
+```
+
+
+### AL TET Day 1
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "TET_Day1_AL")
+
+
+group_by(data,Age) %>%
+  summarise(
+    count = n(),
+    median = median(TET, na.rm = TRUE),
+    IQR = IQR(TET, na.rm = TRUE))
+ 
+# loading package for boxplot
+ggboxplot(data, x = "Age", y = "TET",
+          color = "Age", palette = c("#FFA500", "#FF0000"),
+          ylab = "TET", xlab = "Age")
+
+res <- wilcox.test(TET ~ Age,
+                   data = data,
+                   exact = FALSE)
+res
+```
+
+### AL TET Day 2
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "TET_Day2_AL")
+
+
+group_by(data,Age) %>%
+  summarise(
+    count = n(),
+    median = median(TET, na.rm = TRUE),
+    IQR = IQR(TET, na.rm = TRUE))
+ 
+# loading package for boxplot
+ggboxplot(data, x = "Age", y = "TET",
+          color = "Age", palette = c("#FFA500", "#FF0000"),
+          ylab = "TET", xlab = "Age")
+
+res <- wilcox.test(TET ~ Age,
+                   data = data,
+                   exact = FALSE)
+res
+```
+
+
+### CR TET M
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "TET_CR_M")
+
+
+group_by(data,Day) %>%
+  summarise(
+    count = n(),
+    median = median(TET, na.rm = TRUE),
+    IQR = IQR(TET, na.rm = TRUE))
+ 
+# loading package for boxplot
+ggboxplot(data, x = "Day", y = "TET",
+          color = "Day", palette = c("#FFA500", "#FF0000"),
+          ylab = "TET", xlab = "Day")
+
+
+res <- t.test(data$TET[data$Day==1], data$TET[data$Day==2], paired = T, alternative = "two.sided")
+
+res
+```
+
+### CR TET A
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "TET_CR_A")
+
+
+group_by(data,Day) %>%
+  summarise(
+    count = n(),
+    median = median(TET, na.rm = TRUE),
+    IQR = IQR(TET, na.rm = TRUE))
+ 
+# loading package for boxplot
+ggboxplot(data, x = "Day", y = "TET",
+          color = "Day", palette = c("#FFA500", "#FF0000"),
+          ylab = "TET", xlab = "Day")
+
+
+res <- t.test(data$TET[data$Day==1], data$TET[data$Day==2], paired = T, alternative = "two.sided")
+
+res
+```
+
+
+### CR TET Day 1
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "TET_Day1_CR")
+
+
+group_by(data,Age) %>%
+  summarise(
+    count = n(),
+    median = median(TET, na.rm = TRUE),
+    IQR = IQR(TET, na.rm = TRUE))
+ 
+# loading package for boxplot
+ggboxplot(data, x = "Age", y = "TET",
+          color = "Age", palette = c("#FFA500", "#FF0000"),
+          ylab = "TET", xlab = "Age")
+
+
+res <- t.test(data$TET[data$Age=="M"], data$TET[data$Age=="A"], paired = F, alternative = "two.sided")
+
+res
+```
+
+
+### CR TET Day 2
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "TET_Day2_CR")
+
+
+group_by(data,Age) %>%
+  summarise(
+    count = n(),
+    median = median(TET, na.rm = TRUE),
+    IQR = IQR(TET, na.rm = TRUE))
+ 
+# loading package for boxplot
+ggboxplot(data, x = "Age", y = "TET",
+          color = "Age", palette = c("#FFA500", "#FF0000"),
+          ylab = "TET", xlab = "Age")
+
+
+res <- t.test(data$TET[data$Age=="M"], data$TET[data$Age=="A"], paired = F, alternative = "two.sided")
+
+res
+```
+
+
+# TWR habituation
+```{r}
+data <- read.xlsx("/Users/school/Documents/Lab Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/TWRhabituation.xlsx", sheetName = "TWR_Y_CR")
+data$subject <- as.factor(data$subject)
+data$Time <- as.factor(data$Time)
+
+# ggboxplot(data, x = "Time", y = "Normalized.resp.", add = "point")
+# 
+# model = aov(Normalized.resp. ~ Time, data = data)
+# summary(model)
+# 
+# 
+# TukeyHSD(model) %>% view()
+
+## Not sure how to use this data. after the above test and looking at the padj values in the Tukey test the only group that significantly habituated was the younger AL animals. Maybe statistics should not be used although I belive I did them wrong. Will try to come back to this later.
+
+#http://agroninfotech.blogspot.com/2020/06/one-way-repeated-measures-anova-in-r.html
+
+model = aov(formula = Normalized.resp. ~ Time + Error(subject/Time), data = data)
+summary(model)
+
+summary = data %>%
+          group_by(Time) %>%
+          summarize(Mean_Normalized.resp. = mean(Normalized.resp.),
+                    SD_resp = sd(Normalized.resp.),
+                    SE_resp = sd(Normalized.resp.)/sqrt(length(Normalized.resp.)),
+                    n = n())
+print(summary)
+
+plot(summary$Mean_Normalized.resp.,
+     type = 'o',
+     xlab = 'Time',
+     ylab = 'response')
+
+pairwise.t.test(
+          x = data$Normalized.resp.,
+          g = data$Time,
+          p.adjust.method = 'bonferroni'
+          
+) %>% view()
+## The above code works a lot better but it is still not showing significance in any group except the AL younger samples
+```
+
+# CR vs AL Day 1
+### TTIM in Younger
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "TTIM_Day1_CRvsAL_Y")
+
+
+group_by(data,Diet) %>%
+  summarise(
+    count = n(),
+    median = median(TTIM, na.rm = TRUE),
+    IQR = IQR(TTIM, na.rm = TRUE))
+ 
+# loading package for boxplot
+ggboxplot(data, x = "Diet", y = "TTIM",
+          color = "Diet", palette = c("#FFA500", "#FF0000"),
+          ylab = "TTIM", xlab = "Diet")
+
+res <- wilcox.test(TTIM ~ Diet,
+                   data = data,
+                   exact = FALSE)
+res
+```
+
+### TTIM in Aged
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "TTIM_Day1_CRvsAL_A")
+
+
+group_by(data,Diet) %>%
+  summarise(
+    count = n(),
+    median = median(TTIM, na.rm = TRUE),
+    IQR = IQR(TTIM, na.rm = TRUE))
+ 
+# loading package for boxplot
+ggboxplot(data, x = "Diet", y = "TTIM",
+          color = "Diet", palette = c("#FFA500", "#FF0000"),
+          ylab = "TTIM", xlab = "Diet")
+
+res <- wilcox.test(TTIM ~ Diet,
+                   data = data,
+                   exact = FALSE)
+res
+```
+
+### Bite Frequency in Younger
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "Bites_Day1_CRvsAL_Y")
+
+group_by(data,Diet) %>%
+  summarise(
+    count = n(),
+    median = median(Bites, na.rm = TRUE),
+    IQR = IQR(Bites, na.rm = TRUE))
+ 
+# loading package for boxplot
+ggboxplot(data, x = "Diet", y = "Bites",
+          color = "Diet", palette = c("#FFA500", "#FF0000"),
+          ylab = "Bites", xlab = "Diet")
+ 
+
+res <- wilcox.test(Bites ~ Diet,
+                   data = data,
+                   exact = FALSE)
+res
+```
+
+
+### Bite Frequency in Aged
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "Bites_Day1_CRvsAL_A")
+
+group_by(data,Diet) %>%
+  summarise(
+    count = n(),
+    median = median(Bites, na.rm = TRUE),
+    IQR = IQR(Bites, na.rm = TRUE))
+ 
+# loading package for boxplot
+ggboxplot(data, x = "Diet", y = "Bites",
+          color = "Diet", palette = c("#FFA500", "#FF0000"),
+          ylab = "Bites", xlab = "Diet")
+ 
+
+res <- wilcox.test(Bites ~ Diet,
+                   data = data,
+                   exact = FALSE)
+res
+```
+
+### TET in Younger
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "TET_Day1_CRvsAL_Y")
+
+
+group_by(data,Diet) %>%
+  summarise(
+    count = n(),
+    median = median(TET, na.rm = TRUE),
+    IQR = IQR(TET, na.rm = TRUE))
+ 
+# loading package for boxplot
+ggboxplot(data, x = "Diet", y = "TET",
+          color = "Diet", palette = c("#FFA500", "#FF0000"),
+          ylab = "TET", xlab = "Diet")
+
+res <- wilcox.test(TET ~ Diet,
+                   data = data,
+                   exact = FALSE)
+res
+```
+
+### TET in Aged
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/AIM2data.xlsx", sheetName = "TET_Day1_CRvsAL_A")
+
+
+group_by(data,Diet) %>%
+  summarise(
+    count = n(),
+    median = median(TET, na.rm = TRUE),
+    IQR = IQR(TET, na.rm = TRUE))
+ 
+# loading package for boxplot
+ggboxplot(data, x = "Diet", y = "TET",
+          color = "Diet", palette = c("#FFA500", "#FF0000"),
+          ylab = "TET", xlab = "Diet")
+
+res <- wilcox.test(TET ~ Diet,
+                   data = data,
+                   exact = FALSE)
+res
+```
+
+
+
