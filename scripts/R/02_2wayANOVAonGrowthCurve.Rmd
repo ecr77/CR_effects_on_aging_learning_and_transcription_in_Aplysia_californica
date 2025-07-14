@@ -1,0 +1,85 @@
+# Graphs for Manuscript
+### Growth Curve
+```{r}
+library(xlsx)
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Feeding_Study_2019-2020/Raw_data(weights_notes_forR_update_01-09-23).xlsx", "GrowthData4R")
+
+data$Diet <- as.factor(data$Diet)
+data$Age..days. <- as.factor(data$Age..days.)
+data$ID <- 1:nrow(data)
+
+## test for significance in growth curve
+### below are the pakages I need to test this
+# install.packages('emmeans')
+library(emmeans)
+## first run a 2 way ANOVA with Age and Diet as between-samples factors
+results2 <- aov(Live.Weight..g. ~ Age..days.*Diet, data)
+## summary shows that there is a significant effect with diet, age, and the interaction between the two
+summary(results2)
+## this next bit will run a post-hoc test on the 2-way ANOVA results and let us know at which Age the wheights are different between the 2 diets
+library(dplyr)
+emmeans(results2, ~Diet|Age..days.) %>% pairs(adjust="Tukey", side = "=")
+
+## now we will graph the growth curves with the significance indicated by asterics *
+## First I needed to install the below packages
+# install.packages("plyr")
+## create a new data frame with the ages and the mean-weights of only AL animals
+data2 <- data$Age..days.
+data2 <- unique(data2)
+df <- as.data.frame(data2)
+df$sig <- c("n","y","y","y","y","y","y","y","y","y","y","y","y","y","y","y","y","y","y","y","y","y","y","y","y","y","y","y","y","y","y","n","n")
+df2 <- data
+df2 <- df2 %>% filter(Diet == "AL") 
+library(plyr)
+df3 <- plyr::ddply(df2, .(Age..days.), summarize, mean=mean(Live.Weight..g.))
+df3$sig <- df$sig
+
+## Now plot
+library(ggplot2)
+GrowthCurve <- ggplot(data, aes(x=Age..days., y=Live.Weight..g., group=Diet)) +
+    stat_summary(
+        fun = mean,
+        geom='line',
+        size = 0.65,
+        aes(linetype=Diet)) +
+   stat_summary(
+        fun=mean,
+        geom='point',
+        size = 1.9,
+        aes(shape=Diet)) +
+  scale_shape_manual(values = c(16, 2)) +
+    stat_summary(
+        fun.data=mean_cl_boot,
+        geom='errorbar',
+        width=1) + 
+  geom_point(data=df3[df3$sig == "y",], # these next 3 lines put the astriks on the plot
+             aes(x = Age..days., y = mean + 100), 
+             shape = "*", size = 6,inherit.aes = F) +
+  theme_classic() +
+  theme(axis.title.x = element_text(size=16), , axis.title.y = element_text(size=16), legend.title = element_text(size=14), legend.key.size = unit(0.4, 'cm'), legend.position = c(0.92, 0.85), axis.text = element_text(face="bold", color = "black"), axis.line.x.bottom=element_line(size=0.5), axis.line.y.left=element_line(size=0.5),
+        axis.text.x = element_text(angle = 45)) +
+  xlab("Age (days)") +
+  ylab("Live Weight (g)")
+
+GrowthCurve
+
+## now I will try to put boxes where the months are and label them
+GrowthCurve  +
+  annotate("rect", xmin = 1.4, xmax = 5.8, ymin = 0.5, ymax = 600, 
+           alpha = .3) + # This will give me the boxes
+  annotate("rect", xmin = 9.8, xmax = 13.6, ymin = 0.5, ymax = 600, 
+           alpha = .3) +
+  annotate("rect", xmin = 16.9, xmax = 20.6, ymin = 0.5, ymax = 600, 
+           alpha = .3)+
+  annotate("rect", xmin = 25.5, xmax = 29.6, ymin = 0.5, ymax = 600, 
+           alpha = .3) +
+  annotate(geom = "text", x = 3.5, y = 580, label="Month 6")+
+  annotate(geom = "text", x = 7.9, y = 580, label="Month 7")+
+  annotate(geom = "text", x = 11.8, y = 580, label="Month 8")+
+  annotate(geom = "text", x = 15.2, y = 580, label="Month 9")+
+  annotate(geom = "text", x = 18.8, y = 580, label="Month 10")+
+  annotate(geom = "text", x = 23, y = 580, label="Month 11")+
+  annotate(geom = "text", x = 27.5, y = 580, label="Month 12")+
+  annotate("rect", xmin = 30.7, xmax = 32, ymin = 390, ymax = 500, 
+           alpha = 1, fill = "white")
+```

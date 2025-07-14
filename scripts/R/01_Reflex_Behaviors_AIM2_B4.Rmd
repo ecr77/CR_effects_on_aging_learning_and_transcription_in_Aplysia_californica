@@ -1,0 +1,432 @@
+---
+title: "Reflex_Behaviors_AIM2_B4"
+output: html_document
+date: "2022-11-04"
+---
+
+```{r Time to right reflex Ad Lib}
+library(xlsx)
+dataTTR <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/Refex_behaviors/B4_Reflex_behaviors(update_11-04-22).xlsx", sheetName = "TTR_4Stats_AL")
+shapiro.test(dataTTR$Time)
+library(ggpubr)
+ggdensity(dataTTR$Time)
+ggqqplot(dataTTR$Time)
+## Data are not normal for TTR
+
+dataTTR =
+  mutate(dataTTR,
+         Month = factor(Month, levels=unique(Month)))
+
+# I cannot figure out what packages I need for "histogram" function.
+library(FSA) # this package is for both "Summarize" and "dunnTest"
+Summarize(Time ~ Month,
+          data = dataTTR)
+
+# histogram(~ Time | Month,
+#            data = dataTTR,
+#            layout=c(1,4))
+
+kruskal.test(Time ~ Month,
+             data = dataTTR)
+
+## There are significant differences between Months. Next is a post hoc test
+PH <- dunnTest(Time ~ Month,
+               data=dataTTR,
+               method = "bh")
+
+PH 
+```
+
+```{r Time to right reflex Caloric Restriction}
+dataTTR <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/Refex_behaviors/B4_Reflex_behaviors(update_11-04-22).xlsx", sheetName = "TTR_4Stats_CR")
+shapiro.test(dataTTR$Time)
+ggdensity(dataTTR$Time)
+ggqqplot(dataTTR$Time)
+## Data is not normal for TTR
+
+dataTTR =
+  mutate(dataTTR,
+         Month = factor(Month, levels=unique(Month)))
+
+Summarize(Time ~ Month,
+          data = dataTTR)
+
+# histogram(~ Time | Month,
+#            data = dataTTR,
+#            layout=c(1,4))
+
+kruskal.test(Time ~ Month,
+             data = dataTTR)
+
+## There are significant differences between Months. Next is a post hoc test
+
+PH <- dunnTest(Time ~ Month,
+               data=dataTTR,
+               method = "bh")
+
+PH 
+```
+
+
+```{r Tail withdrawl reflex Ad Lib}
+dataTWR <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/Refex_behaviors/B4_Reflex_behaviors(update_11-04-22).xlsx", sheetName = "TWR_4Stats_AL")
+shapiro.test(dataTWR$Time)
+ggdensity(dataTWR$Time)
+ggqqplot(dataTWR$Time)
+## Data is not normal for TTR
+
+dataTWR =
+  mutate(dataTWR,
+         Month = factor(Month, levels=unique(Month)))
+
+Summarize(Time ~ Month,
+          data = dataTWR)
+
+# histogram(~ Time | Month,
+#            data = dataTWR,
+#            layout=c(1,4))
+
+kruskal.test(Time ~ Month,
+             data = dataTWR)
+
+## There are significant differences between Months. Next is a post hoc test
+
+PH <- dunnTest(Time ~ Month,
+               data=dataTWR,
+               method = "bh")
+
+PH 
+```
+
+
+```{r Tail withdrawl reflex Caloric Restriction}
+dataTWR <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/Refex_behaviors/B4_Reflex_behaviors(update_11-04-22).xlsx", sheetName = "TWR_4Stats_CR")
+shapiro.test(dataTWR$Time)
+ggdensity(dataTWR$Time)
+ggqqplot(dataTWR$Time)
+## Data is not normal for TTR
+
+dataTWR =
+  mutate(dataTWR,
+         Month = factor(Month, levels=unique(Month)))
+
+Summarize(Time ~ Month,
+          data = dataTWR)
+
+# histogram(~ Time | Month,
+#            data = dataTWR,
+#            layout=c(1,4))
+
+kruskal.test(Time ~ Month,
+             data = dataTWR)
+
+## There are significant differences between Months. Next is a post hoc test
+
+PH <- dunnTest(Time ~ Month,
+               data=dataTWR,
+               method = "bh")
+
+PH 
+```
+
+# Stats to 12 months
+# RR
+## AL
+```{r Time to right reflex Ad Lib}
+dataTTR <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/Refex_behaviors/B4_Reflex_behaviors(update_11-04-22).xlsx", sheetName = "TTR_4Stats_AL12")
+shapiro.test(dataTTR$Time)
+ggdensity(dataTTR$Time)
+ggqqplot(dataTTR$Time)
+## Data is not normal for TTR
+
+dataTTR =
+  mutate(dataTTR,
+         Month = factor(Month, levels=unique(Month)))
+
+Summarize(Time ~ Month,
+          data = dataTTR)
+
+# histogram(~ Time | Month,
+#            data = dataTTR,
+#            layout=c(1,4))
+
+kruskal.test(Time ~ Month,
+             data = dataTTR)
+
+## There are significant differences between Months. Next is a post hoc test
+
+PH <- dunnTest(Time ~ Month,
+               data=dataTTR,
+               method = "bh")
+
+PH 
+```
+
+# RR
+## CR
+```{r Time to right reflex Caloric Restriction}
+dataTTR <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/Refex_behaviors/B4_Reflex_behaviors(update_11-04-22).xlsx", sheetName = "TTR_4Stats_CR12")
+shapiro.test(dataTTR$Time)
+ggdensity(dataTTR$Time)
+ggqqplot(dataTTR$Time)
+## Data is not normal for TTR
+
+dataTTR =
+  mutate(dataTTR,
+         Month = factor(Month, levels=unique(Month)))
+
+Summarize(Time ~ Month,
+          data = dataTTR)
+
+# histogram(~ Time | Month,
+#            data = dataTTR,
+#            layout=c(1,4))
+
+kruskal.test(Time ~ Month,
+             data = dataTTR)
+
+## There are significant differences between Months. Next is a post hoc test
+
+PH <- dunnTest(Time ~ Month,
+               data=dataTTR,
+               method = "bh")
+
+PH 
+```
+
+# TWR
+## AL
+```{r Tail withdrawl reflex Ad Lib}
+dataTWR <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/Refex_behaviors/B4_Reflex_behaviors(update_11-04-22).xlsx", sheetName = "TWR_4Stats_AL12")
+shapiro.test(dataTWR$Time)
+ggdensity(dataTWR$Time)
+ggqqplot(dataTWR$Time)
+## Data is not normal for TTR
+
+dataTWR =
+  mutate(dataTWR,
+         Month = factor(Month, levels=unique(Month)))
+
+Summarize(Time ~ Month,
+          data = dataTWR)
+
+# histogram(~ Time | Month,
+#            data = dataTWR,
+#            layout=c(1,4))
+
+kruskal.test(Time ~ Month,
+             data = dataTWR)
+
+## There are significant differences between Months. Next is a post hoc test
+
+PH <- dunnTest(Time ~ Month,
+               data=dataTWR,
+               method = "bh")
+
+PH 
+```
+
+# TWR
+## CR
+```{r Tail withdrawl reflex Caloric Restriction}
+dataTWR <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/Refex_behaviors/B4_Reflex_behaviors(update_11-04-22).xlsx", sheetName = "TWR_4Stats_CR12")
+shapiro.test(dataTWR$Time)
+ggdensity(dataTWR$Time)
+ggqqplot(dataTWR$Time)
+## Data is not normal for TTR
+
+dataTWR =
+  mutate(dataTWR,
+         Month = factor(Month, levels=unique(Month)))
+
+Summarize(Time ~ Month,
+          data = dataTWR)
+
+# histogram(~ Time | Month,
+#            data = dataTWR,
+#            layout=c(1,4))
+
+kruskal.test(Time ~ Month,
+             data = dataTWR)
+
+## There are significant differences between Months. Next is a post hoc test
+
+PH <- dunnTest(Time ~ Month,
+               data=dataTWR,
+               method = "bh")
+
+PH 
+```
+
+
+# Differnces between ages in same month
+# TWR
+## Wicoxon rank sum test = Mann Whitney U test
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/Refex_behaviors/B4_Reflex_behaviors(update_11-04-22).xlsx", sheetName = "TWR_9mon")
+# group the data according to what you want to test for (here, differences in RPM between Age; So we group by Age and the look at quantity of RPM)
+library(dplyr) # this package containes "summarise"
+group_by(data,Diet) %>%
+  summarise(
+    count = n(),
+    median = median(Time, na.rm = TRUE),
+    IQR = IQR(Time, na.rm = TRUE))
+ 
+# Visualize the data with a boxplot
+ggboxplot(data, x = "Diet", y = "Time",
+          color = "Diet", palette = c("#FFA500", "#FF0000"),
+          ylab = "Time to Complete RR", xlab = "Diet", order = c("AL", "CR"),
+          title = "9 Months (TWR)")
+ 
+# now we will do the actual stat test: in this instance we are looking for differences in only two groups so a Wlicoxson Test will suffice
+res <- wilcox.test(Time ~ Diet,
+                   data = data,
+                   exact = FALSE)
+print("9 months")
+res
+# this going to be repeated a few times below
+
+#______________________________________________________________________________
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/Refex_behaviors/B4_Reflex_behaviors(update_11-04-22).xlsx", sheetName = "TWR_10mon")
+
+group_by(data,Diet) %>%
+  summarise(
+    count = n(),
+    median = median(Time, na.rm = TRUE),
+    IQR = IQR(Time, na.rm = TRUE))
+ 
+ggboxplot(data, x = "Diet", y = "Time",
+          color = "Diet", palette = c("#FFA500", "#FF0000"),
+          ylab = "Time to Complete RR", xlab = "Diet", order = c("AL", "CR"),
+          title = "10 Months (TWR)")
+
+res <- wilcox.test(Time ~ Diet,
+                   data = data,
+                   exact = FALSE)
+print("10 months")
+res
+
+#______________________________________________________________________________
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/Refex_behaviors/B4_Reflex_behaviors(update_11-04-22).xlsx", sheetName = "TWR_11mon")
+
+group_by(data,Diet) %>%
+  summarise(
+    count = n(),
+    median = median(Time, na.rm = TRUE),
+    IQR = IQR(Time, na.rm = TRUE))
+ 
+ggboxplot(data, x = "Diet", y = "Time",
+          color = "Diet", palette = c("#FFA500", "#FF0000"),
+          ylab = "Time to Complete RR", xlab = "Diet", order = c("AL", "CR"),
+          title = "11 Months (TWR)")
+
+res <- wilcox.test(Time ~ Diet,
+                   data = data,
+                   exact = FALSE)
+print("11 months")
+res
+
+#______________________________________________________________________________
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/Refex_behaviors/B4_Reflex_behaviors(update_11-04-22).xlsx", sheetName = "TWR_12mon")
+
+group_by(data,Diet) %>%
+  summarise(
+    count = n(),
+    median = median(Time, na.rm = TRUE),
+    IQR = IQR(Time, na.rm = TRUE))
+ 
+ggboxplot(data, x = "Diet", y = "Time",
+          color = "Diet", palette = c("#FFA500", "#FF0000"),
+          ylab = "Time to Complete RR", xlab = "Diet", order = c("AL", "CR"),
+          title = "12 Months (TWR)")
+
+res <- wilcox.test(Time ~ Diet,
+                   data = data,
+                   exact = FALSE)
+print("12 months")
+res
+```
+
+# RR
+## Wicoxon rank sum test = Mann Whitney U test
+```{r}
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/Refex_behaviors/B4_Reflex_behaviors(update_11-04-22).xlsx", sheetName = "RR_9mon")
+
+group_by(data,Diet) %>%
+  summarise(
+    count = n(),
+    median = median(Time, na.rm = TRUE),
+    IQR = IQR(Time, na.rm = TRUE))
+ 
+ggboxplot(data, x = "Diet", y = "Time",
+          color = "Diet", palette = c("#FFA500", "#FF0000"),
+          ylab = "Time to Complete RR", xlab = "Diet", order = c("AL", "CR"),
+          title = "9 Months (RR)")
+
+res <- wilcox.test(Time ~ Diet,
+                   data = data,
+                   exact = FALSE)
+print("9 months")
+res
+
+#_____________________________________________________________________________
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/Refex_behaviors/B4_Reflex_behaviors(update_11-04-22).xlsx", sheetName = "RR_10mon")
+
+group_by(data,Diet) %>%
+  summarise(
+    count = n(),
+    median = median(Time, na.rm = TRUE),
+    IQR = IQR(Time, na.rm = TRUE))
+ 
+ggboxplot(data, x = "Diet", y = "Time",
+          color = "Diet", palette = c("#FFA500", "#FF0000"),
+          ylab = "Time to Complete RR", xlab = "Diet", order = c("AL", "CR"),
+          title = "10 Months (RR)")
+
+res <- wilcox.test(Time ~ Diet,
+                   data = data,
+                   exact = FALSE)
+print("10 months")
+res
+
+#_____________________________________________________________________________
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/Refex_behaviors/B4_Reflex_behaviors(update_11-04-22).xlsx", sheetName = "RR_11mon")
+
+group_by(data,Diet) %>%
+  summarise(
+    count = n(),
+    median = median(Time, na.rm = TRUE),
+    IQR = IQR(Time, na.rm = TRUE))
+ 
+ggboxplot(data, x = "Diet", y = "Time",
+          color = "Diet", palette = c("#FFA500", "#FF0000"),
+          ylab = "Time to Complete RR", xlab = "Diet", order = c("AL", "CR"),
+          title = "11 Months (RR)")
+
+res <- wilcox.test(Time ~ Diet,
+                   data = data,
+                   exact = FALSE)
+print("11 months")
+res
+
+#_____________________________________________________________________________
+data <- read.xlsx("/Users/school/Documents/Documents/UM_Lab_Work/AIM2_Caloric_Restriction/Paper/Results_and_Figures/Refex_behaviors/B4_Reflex_behaviors(update_11-04-22).xlsx", sheetName = "RR_12mon")
+
+group_by(data,Diet) %>%
+  summarise(
+    count = n(),
+    median = median(Time, na.rm = TRUE),
+    IQR = IQR(Time, na.rm = TRUE))
+ 
+ggboxplot(data, x = "Diet", y = "Time",
+          color = "Diet", palette = c("#FFA500", "#FF0000"),
+          ylab = "Time to Complete RR", xlab = "Diet", order = c("AL", "CR"),
+          title = "12 Months (RR)")
+
+res <- wilcox.test(Time ~ Diet,
+                   data = data,
+                   exact = FALSE)
+print("12 months")
+res
+```
+
